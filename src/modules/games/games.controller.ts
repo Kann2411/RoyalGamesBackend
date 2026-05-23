@@ -26,11 +26,11 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 
 @ApiTags('Games')
-@Controller('games')
+@Controller()
 export class GamesController {
   constructor(private gamesService: GamesService) {}
 
-  @Post()
+  @Post('game/create')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
@@ -43,14 +43,14 @@ export class GamesController {
     return this.gamesService.createGame(createGameDto);
   }
 
-  @Get()
+  @Get('games')
   @ApiOperation({ summary: 'Get all games' })
   @ApiResponse({ status: 200, description: 'Games retrieved successfully' })
   async getAllGames() {
     return this.gamesService.getAllGames();
   }
 
-  @Get(':id')
+  @Get('game/:id')
   @ApiOperation({ summary: 'Get game by ID' })
   @ApiParam({ name: 'id', description: 'Game UUID' })
   @ApiResponse({ status: 200, description: 'Game retrieved successfully' })

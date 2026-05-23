@@ -32,20 +32,21 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { Role } from '../../common/enums/role.enum';
 
 @ApiTags('Users')
-@Controller('users')
+@Controller()
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
-  @Post()
+  @Post('signup')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a new user' })
   @ApiResponse({ status: 201, description: 'User created successfully' })
   @ApiResponse({ status: 409, description: 'Email or nick already exists' })
   async createUser(@Body() createUserDto: CreateUserDto) {
+    console.log(createUserDto);
     return this.usersService.createUser(createUserDto);
   }
 
-  @Get()
+  @Get('getUsers')
   @ApiOperation({ summary: 'Get all users' })
   @ApiResponse({ status: 200, description: 'Users retrieved successfully' })
   async getAllUsers() {
@@ -61,7 +62,7 @@ export class UsersController {
     return this.usersService.getUserById(id);
   }
 
-  @Get('by-email')
+  @Get('user-email')
   @ApiOperation({ summary: 'Get user by email' })
   @ApiQuery({ name: 'email', description: 'User email' })
   @ApiResponse({ status: 200, description: 'User retrieved successfully' })
@@ -70,44 +71,44 @@ export class UsersController {
     return this.usersService.getUserByEmail(email);
   }
 
-  @Get('by-nick/:nick')
+  @Get('user-nick')
   @ApiOperation({ summary: 'Get user by nick' })
-  @ApiParam({ name: 'nick', description: 'User nickname' })
+  @ApiQuery({ name: 'nick', description: 'User nickname' })
   @ApiResponse({ status: 200, description: 'User retrieved successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async getUserByNick(@Param('nick') nick: string) {
+  async getUserByNick(@Query('nick') nick: string) {
     return this.usersService.getUserByNick(nick);
   }
 
-  @Patch(':id')
+  @Patch('actualizar-usuario/:userId')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update user' })
-  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User updated successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async updateUser(
-    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('userId', new ParseUUIDPipe()) userId: string,
     @Body() updateUserDto: UpdateUserDto,
   ) {
-    return this.usersService.updateUser(id, updateUserDto);
+    return this.usersService.updateUser(userId, updateUserDto);
   }
 
-  @Delete(':id')
+  @Delete('user-delete/:userId')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete user (Admin only)' })
-  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User deleted successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
   @ApiResponse({ status: 403, description: 'Forbidden' })
-  async deleteUser(@Param('id', new ParseUUIDPipe()) id: string) {
-    await this.usersService.deleteUser(id);
+  async deleteUser(@Param('userId', new ParseUUIDPipe()) userId: string) {
+    await this.usersService.deleteUser(userId);
     return { message: 'User deleted successfully' };
   }
 
-  @Put('ban')
+  @Put('user-ban')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
@@ -119,7 +120,7 @@ export class UsersController {
     return this.usersService.banUser(manageUserDto);
   }
 
-  @Put('inactive')
+  @Put('inactivar-user')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(Role.ADMIN)
   @ApiBearerAuth()
@@ -143,14 +144,14 @@ export class UsersController {
     return this.usersService.setUserAdmin(adminUserDto);
   }
 
-  @Put('first-chips/:id')
+  @Put('firstchips/:userId')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Give first chips to user' })
-  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'First chips given' })
   @ApiResponse({ status: 400, description: 'User already received first chips' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async giveFirstChips(@Param('id', new ParseUUIDPipe()) id: string) {
-    return this.usersService.giveFirstChips(id);
+  async giveFirstChips(@Param('userId', new ParseUUIDPipe()) userId: string) {
+    return this.usersService.giveFirstChips(userId);
   }
 }

@@ -18,7 +18,7 @@ import { PaymentsService } from './payments.service';
 import { CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
 
 @ApiTags('Payments')
-@Controller('payments')
+@Controller()
 export class PaymentsController {
   constructor(private paymentsService: PaymentsService) {}
 
@@ -72,7 +72,7 @@ export class PaymentsController {
     return this.paymentsService.createPayPalOrder(createPayPalOrderDto);
   }
 
-  @Post('paypal/capture-order')
+  @Post('capture-paypal-order')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Capture PayPal order' })
   @ApiResponse({ status: 200, description: 'Order captured successfully' })
@@ -82,14 +82,14 @@ export class PaymentsController {
   }
 
   // ============= GENERAL =============
-  @Get()
+  @Get('payments')
   @ApiOperation({ summary: 'Get all payments' })
   @ApiResponse({ status: 200, description: 'Payments retrieved successfully' })
   async getAllPayments() {
     return this.paymentsService.getAllPayments();
   }
 
-  @Get('user/:userId')
+  @Get('payments/user/:userId')
   @ApiOperation({ summary: 'Get user payments' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User payments retrieved successfully' })

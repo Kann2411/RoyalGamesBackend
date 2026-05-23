@@ -18,11 +18,11 @@ import { ChipsService } from './chips.service';
 import { ChipsTransactionDto } from './dtos/chips-transaction.dto';
 
 @ApiTags('Chips')
-@Controller('chips')
+@Controller()
 export class ChipsController {
   constructor(private chipsService: ChipsService) {}
 
-  @Put('add')
+  @Put('add/chips')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Add chips to user' })
   @ApiResponse({ status: 200, description: 'Chips added successfully' })
@@ -31,7 +31,7 @@ export class ChipsController {
     return this.chipsService.addChips(chipsTransactionDto);
   }
 
-  @Put('remove')
+  @Put('remove/chips')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Remove chips from user' })
   @ApiResponse({ status: 200, description: 'Chips removed successfully' })
@@ -41,7 +41,7 @@ export class ChipsController {
     return this.chipsService.removeChips(chipsTransactionDto);
   }
 
-  @Get(':userId')
+  @Get('chips/:userId')
   @ApiOperation({ summary: 'Get user chips balance' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'Chips retrieved successfully' })
