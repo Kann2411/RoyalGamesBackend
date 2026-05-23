@@ -1,6 +1,7 @@
 import { IsEmail, IsString, MinLength, IsOptional, IsInt } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PartialType } from '@nestjs/swagger';
+import { Type } from 'class-transformer';
 import { CreateUserDto } from './create-user.dto';
 
 export class UpdateUserDto extends PartialType(CreateUserDto) {
@@ -16,6 +17,7 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
 
   @ApiProperty({ example: 25, description: 'User age', required: false })
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   age?: number;
 
@@ -33,4 +35,9 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
   @IsOptional()
   @IsString()
   avatar?: string;
+
+  @ApiProperty({ example: 'image_url', description: 'Image URL', required: false })
+  @IsOptional()
+  @IsString()
+  image?: string;
 }

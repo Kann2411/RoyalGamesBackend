@@ -1,4 +1,5 @@
 import { IsEmail, IsString, MinLength, IsOptional, IsInt, Min } from 'class-validator';
+import { Type } from 'class-transformer';
 import { ApiProperty } from '@nestjs/swagger';
 
 export class CreateUserDto {
@@ -21,6 +22,7 @@ export class CreateUserDto {
 
   @ApiProperty({ example: 25, description: 'User age', required: false })
   @IsOptional()
+  @Type(() => Number)
   @IsInt()
   age?: number;
 

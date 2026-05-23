@@ -12,6 +12,7 @@ import {
   ParseUUIDPipe,
   HttpStatus,
   HttpCode,
+  ForbiddenException,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -29,6 +30,7 @@ import { AdminUserDto } from './dtos/admin-user.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../../common/guards/roles.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '../../common/enums/role.enum';
 
 @ApiTags('Users')
@@ -86,11 +88,18 @@ export class UsersController {
   @ApiOperation({ summary: 'Update user' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User updated successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Cannot update another user profile' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async updateUser(
     @Param('userId', new ParseUUIDPipe()) userId: string,
     @Body() updateUserDto: UpdateUserDto,
+    @CurrentUser() user: any,
   ) {
+    // Verify user can only update their own profile
+    if (user.id !== userId) {
+      throw new ForbiddenException('Cannot update another user profile');
+    }
+    console.log(updateUserDto);
     return this.usersService.updateUser(userId, updateUserDto);
   }
 
