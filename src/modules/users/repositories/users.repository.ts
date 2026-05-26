@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Repository } from 'typeorm';
+import { Repository, Raw } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from '../entities/user.entity';
 
@@ -19,7 +19,11 @@ export class UsersRepository {
   }
 
   async findByNick(nick: string): Promise<User | null> {
-    return this.repository.findOne({ where: { nick } });
+    return this.repository.findOne({
+      where: {
+        nick: Raw((alias) => `LOWER(${alias}) = LOWER(:nick)`, { nick }),
+      },
+    });
   }
 
   async findAll(): Promise<User[]> {

@@ -8,6 +8,7 @@ import {
 } from 'typeorm';
 import { Game } from '../../games/entities/game.entity';
 import { Pay } from '../../payments/entities/pay.entity';
+import { Role } from '../../../common/enums/role.enum';
 
 @Entity('users')
 export class User {
@@ -44,8 +45,8 @@ export class User {
   @Column({ type: 'bigint', default: 0 })
   chips: number;
 
-  @Column({ type: 'boolean', default: false })
-  admin: boolean;
+  @Column({ type: 'enum', enum: Role, default: Role.USER })
+  role: Role;
 
   @Column({ type: 'boolean', default: false })
   banned: boolean;

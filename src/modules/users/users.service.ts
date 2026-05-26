@@ -6,14 +6,16 @@ import { AdminUserDto } from './dtos/admin-user.dto';
 import { UsersRepository } from './repositories/users.repository';
 import { PasswordUtils } from '../../common/utils/password.utils';
 import { User } from './entities/user.entity';
+import { Role } from '../../common/enums/role.enum';
 
 @Injectable()
 export class UsersService {
   constructor(private usersRepository: UsersRepository) {}
 
   async createUser(createUserDto: CreateUserDto): Promise<Partial<User>> {
+    const emailLowerCase = createUserDto.email.toLowerCase();
     const existingEmail = await this.usersRepository.findByEmail(
-      createUserDto.email,
+      emailLowerCase,
     );
     if (existingEmail) {
       throw new ConflictException('Email already exists');
@@ -32,6 +34,7 @@ export class UsersService {
 
     const user = await this.usersRepository.create({
       ...createUserDto,
+      email: emailLowerCase,
       password: hashedPassword,
       chips: 0,
       firstChips: false,
@@ -47,16 +50,18 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    if (updateUserDto.email && updateUserDto.email !== user.email) {
+    if (updateUserDto.email && updateUserDto.email.toLowerCase() !== user.email) {
+      const emailLowerCase = updateUserDto.email.toLowerCase();
       const existingEmail = await this.usersRepository.findByEmail(
-        updateUserDto.email,
+        emailLowerCase,
       );
       if (existingEmail) {
         throw new ConflictException('Email already exists');
       }
+      updateUserDto.email = emailLowerCase;
     }
 
-    if (updateUserDto.nick && updateUserDto.nick !== user.nick) {
+    if (updateUserDto.nick && updateUserDto.nick.toLowerCase() !== user.nick.toLowerCase()) {
       const existingNick = await this.usersRepository.findByNick(
         updateUserDto.nick,
       );
@@ -91,7 +96,8 @@ export class UsersService {
   }
 
   async getUserByEmail(email: string): Promise<Partial<User>> {
-    const user = await this.usersRepository.findByEmail(email);
+    const emailLowerCase = email.toLowerCase();
+    const user = await this.usersRepository.findByEmail(emailLowerCase);
     if (!user) {
       throw new NotFoundException('User not found');
     }
@@ -152,7 +158,7 @@ export class UsersService {
     }
     const updatedUser = await this.usersRepository.update(
       adminUserDto.userId,
-      { admin: adminUserDto.admin },
+      { role: adminUserDto.role },
     );
     if (!updatedUser) {
       throw new NotFoundException('User not found');

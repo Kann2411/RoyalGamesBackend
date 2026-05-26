@@ -18,6 +18,7 @@ export const typeormConfig = (): TypeOrmModuleOptions => {
     entities: [path.join(__dirname, `../modules/**/entities/*.entity${ext}`)],
     migrations: [path.join(__dirname, `../migrations/*${ext}`)],
     synchronize: process.env.NODE_ENV !== 'production',
+    dropSchema: false,
     logging: process.env.NODE_ENV === 'development',
     // Use explicit DB_SSL flag to avoid attempting SSL against servers that don't support it
     ssl: useSsl ? { rejectUnauthorized: false } : false,
