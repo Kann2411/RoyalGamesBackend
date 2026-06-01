@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import axios from 'axios';
 import * as paypalCheckoutServerSdk from '@paypal/checkout-server-sdk';
+import MercadoPagoConfig, { Preference } from 'mercadopago';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from '../users/entities/user.entity';
@@ -33,42 +34,70 @@ export class PaymentsService {
         throw new NotFoundException('User not found');
       }
 
-      const mp = require('mercadopago');
-      mp.configure({
-        access_token: process.env.MERCADOPAGO_ACCESS_TOKEN,
+      const client = new MercadoPagoConfig({
+        accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+      });
+      const preferenceClient = new Preference(client);
+
+      const mepagoSuccessUrl = process.env.MERCADOPAGO_SUCCESS_URL;
+      const mepagoFailureUrl = process.env.MERCADOPAGO_FAILURE_URL;
+      const mepagoPendingUrl = process.env.MERCADOPAGO_PENDING_URL;
+      const shouldUseAutoReturn =
+        process.env.NODE_ENV === 'production' &&
+        mepagoSuccessUrl &&
+        !mepagoSuccessUrl.includes('localhost') &&
+        !mepagoSuccessUrl.includes('127.0.0.1');
+
+      const currencyId = (createMercadoPagoOrderDto.currency || 'COP').toUpperCase();
+      const supportedCurrencies = ['COP', 'MXN', 'USD', 'ARS', 'BRL', 'EUR'];
+      if (!supportedCurrencies.includes(currencyId)) {
+        throw new BadRequestException(`Unsupported MercadoPago currency: ${currencyId}`);
+      }
+
+      const response = await preferenceClient.create({
+        body: {
+          items: [
+            {
+              id: 'chips',
+              title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
+              unit_price: parseFloat(createMercadoPagoOrderDto.price),
+              quantity: 1,
+              currency_id: currencyId,
+            },
+          ],
+          payer: {
+            email: user.email,
+          },
+          payment_methods: {
+            excluded_payment_types: [
+              { id: 'digital_currency' },
+              { id: 'digital_wallet' },
+            ],
+            installments: 1,
+          },
+          back_urls: {
+            success: mepagoSuccessUrl,
+            failure: mepagoFailureUrl,
+            pending: mepagoPendingUrl,
+          },
+          ...(shouldUseAutoReturn ? { auto_return: 'approved' } : {}),
+          external_reference: createMercadoPagoOrderDto.userId,
+          metadata: {
+            chips: createMercadoPagoOrderDto.chips,
+          },
+        },
       });
 
-      const preference = {
-        items: [
-          {
-            title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
-            unit_price: parseFloat(createMercadoPagoOrderDto.price),
-            quantity: 1,
-            currency_id: 'USD',
-          },
-        ],
-        payer: {
-          email: user.email,
-        },
-        back_urls: {
-          success: process.env.MERCADOPAGO_SUCCESS_URL,
-          failure: process.env.MERCADOPAGO_FAILURE_URL,
-          pending: process.env.MERCADOPAGO_PENDING_URL,
-        },
-        external_reference: createMercadoPagoOrderDto.userId,
-        metadata: {
-          chips: createMercadoPagoOrderDto.chips,
-        },
-      };
-
-      const response = await mp.preferences.create(preference);
-
       return {
-        orderId: response.body.id,
-        initPoint: response.body.init_point,
+        orderId: response.id,
+        initPoint: process.env.NODE_ENV === 'production'
+          ? response.init_point
+          : response.sandbox_init_point,
       };
-    } catch (error) {
-      this.logger.error('MercadoPago Order Creation Error:', error);
+    } catch (error: any) {
+      const errorMessage =
+        error?.response?.body?.message || error?.message || 'Unknown MercadoPago error';
+      this.logger.error('MercadoPago Order Creation Error:', errorMessage, error);
       throw new BadRequestException('Failed to create MercadoPago order');
     }
   }
@@ -76,12 +105,11 @@ export class PaymentsService {
   async handleMercadoPagoWebhook(data: any): Promise<void> {
     try {
       if (data.type === 'payment') {
-        const mp = require('mercadopago');
-        mp.configure({
-          access_token: process.env.MERCADOPAGO_ACCESS_TOKEN,
+        const mpClient = new MercadoPagoConfig({
+          accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
         });
 
-        const paymentData = await mp.payment.findById(data.data.id);
+        const paymentData = await mpClient.payment.findById(data.data.id);
         const payment = paymentData.body;
 
         if (payment.status === 'approved') {
@@ -122,42 +150,64 @@ export class PaymentsService {
         throw new NotFoundException('User not found');
       }
 
-      const mp = require('mercadopago');
-      mp.configure({
-        access_token: process.env.MERCADOPAGO_ACCESS_TOKEN_MX,
+      const client = new MercadoPagoConfig({
+        accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN_MX,
+      });
+      const preferenceClient = new Preference(client);
+
+      const mepagoSuccessUrlMx = process.env.MERCADOPAGO_SUCCESS_URL_MX;
+      const mepagoFailureUrlMx = process.env.MERCADOPAGO_FAILURE_URL_MX;
+      const mepagoPendingUrlMx = process.env.MERCADOPAGO_PENDING_URL_MX;
+      const shouldUseAutoReturnMx =
+        process.env.NODE_ENV === 'production' &&
+        mepagoSuccessUrlMx &&
+        !mepagoSuccessUrlMx.includes('localhost') &&
+        !mepagoSuccessUrlMx.includes('127.0.0.1');
+
+      const response = await preferenceClient.create({
+        body: {
+          items: [
+            {
+              id: 'chips',
+              title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
+              unit_price: parseFloat(createMercadoPagoOrderDto.price),
+              quantity: 1,
+              currency_id: 'MXN',
+            },
+          ],
+          payer: {
+            email: user.email,
+          },
+          payment_methods: {
+            excluded_payment_types: [
+              { id: 'digital_currency' },
+              { id: 'digital_wallet' },
+            ],
+            installments: 1,
+          },
+          back_urls: {
+            success: mepagoSuccessUrlMx,
+            failure: mepagoFailureUrlMx,
+            pending: mepagoPendingUrlMx,
+          },
+          ...(shouldUseAutoReturnMx ? { auto_return: 'approved' } : {}),
+          external_reference: createMercadoPagoOrderDto.userId,
+          metadata: {
+            chips: createMercadoPagoOrderDto.chips,
+          },
+        },
       });
 
-      const preference = {
-        items: [
-          {
-            title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
-            unit_price: parseFloat(createMercadoPagoOrderDto.price),
-            quantity: 1,
-            currency_id: 'MXN',
-          },
-        ],
-        payer: {
-          email: user.email,
-        },
-        back_urls: {
-          success: process.env.MERCADOPAGO_SUCCESS_URL_MX,
-          failure: process.env.MERCADOPAGO_FAILURE_URL_MX,
-          pending: process.env.MERCADOPAGO_PENDING_URL_MX,
-        },
-        external_reference: createMercadoPagoOrderDto.userId,
-        metadata: {
-          chips: createMercadoPagoOrderDto.chips,
-        },
-      };
-
-      const response = await mp.preferences.create(preference);
-
       return {
-        orderId: response.body.id,
-        initPoint: response.body.init_point,
+        orderId: response.id,
+        initPoint: process.env.NODE_ENV === 'production'
+          ? response.init_point
+          : response.sandbox_init_point,
       };
-    } catch (error) {
-      this.logger.error('MercadoPago MX Order Creation Error:', error);
+    } catch (error: any) {
+      const errorMessage =
+        error?.response?.body?.message || error?.message || 'Unknown MercadoPago MX error';
+      this.logger.error('MercadoPago MX Order Creation Error:', errorMessage, error);
       throw new BadRequestException('Failed to create MercadoPago MX order');
     }
   }
@@ -165,12 +215,11 @@ export class PaymentsService {
   async handleMercadoPagoWebhookMx(data: any): Promise<void> {
     try {
       if (data.type === 'payment') {
-        const mp = require('mercadopago');
-        mp.configure({
-          access_token: process.env.MERCADOPAGO_ACCESS_TOKEN_MX,
+        const mpClient = new MercadoPagoConfig({
+          accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN_MX,
         });
 
-        const paymentData = await mp.payment.findById(data.data.id);
+        const paymentData = await mpClient.payment.findById(data.data.id);
         const payment = paymentData.body;
 
         if (payment.status === 'approved') {

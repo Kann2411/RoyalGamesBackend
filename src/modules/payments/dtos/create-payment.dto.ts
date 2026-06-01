@@ -30,9 +30,13 @@ export class CreateMercadoPagoOrderDto {
   @Min(1)
   chips: number;
 
-  @ApiProperty({ example: '10.00', description: 'Price in USD' })
+  @ApiProperty({ example: '10.00', description: 'Price in local currency' })
   @IsString()
   price: string;
+
+  @ApiProperty({ example: 'COP', description: 'Currency code for MercadoPago' })
+  @IsString()
+  currency: string;
 }
 
 export class CreatePayPalOrderDto {
