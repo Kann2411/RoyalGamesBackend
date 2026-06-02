@@ -6,12 +6,35 @@ import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { User } from '../users/entities/user.entity';
 import { Pay } from './entities/pay.entity';
-import { CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
+import { CreateOrderDto, CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
 import { PaymentsRepository } from './repositories/payments.repository';
 
 @Injectable()
 export class PaymentsService {
   private readonly logger = new Logger(PaymentsService.name);
+
+  // Mapeo de países a monedas para MercadoPago
+  private readonly countryToCurrency: { [key: string]: string } = {
+    argentina: 'ARS',
+    brasil: 'BRL',
+    br: 'BRL',
+    ar: 'ARS',
+    mx: 'MXN',
+    mexico: 'MXN',
+    co: 'COP',
+    colombia: 'COP',
+    cl: 'CLP',
+    chile: 'CLP',
+    pe: 'PEN',
+    peru: 'PEN',
+    uy: 'UYU',
+    uruguay: 'UYU',
+    us: 'USD',
+    usa: 'USD',
+    eu: 'EUR',
+    es: 'EUR',
+    france: 'EUR',
+  };
 
   constructor(
     private paymentsRepository: PaymentsRepository,
@@ -20,6 +43,47 @@ export class PaymentsService {
     @InjectRepository(Pay)
     private payRepository: Repository<Pay>,
   ) {}
+
+  /**
+   * Determina la moneda según el país del usuario
+   * Por defecto retorna COP (Pesos Colombianos)
+   */
+  private getCurrencyByCountry(country?: string): string {
+    if (!country) return 'COP';
+    const normalizedCountry = country.toLowerCase().trim();
+    return this.countryToCurrency[normalizedCountry] || 'COP';
+  }
+
+  /**
+   * Crea una orden de MercadoPago de forma unificada
+   * Maneja automáticamente la moneda según el país del usuario
+   */
+  async createMercadoPagoOrderUnified(createOrderDto: CreateOrderDto): Promise<any> {
+    try {
+      const user = await this.usersRepository.findOne({
+        where: { id: createOrderDto.userId },
+      });
+
+      if (!user) {
+        throw new NotFoundException('User not found');
+      }
+
+      // Determinar la moneda según el país del usuario
+      const currency = createOrderDto.currency || this.getCurrencyByCountry(user.country);
+
+      const mercadoPagoDto: CreateMercadoPagoOrderDto = {
+        userId: createOrderDto.userId,
+        chips: createOrderDto.chips,
+        price: createOrderDto.price,
+        currency,
+      };
+      
+      return await this.createMercadoPagoOrder(mercadoPagoDto);
+    } catch (error) {
+      this.logger.error('Order Creation Error:', error);
+      throw error;
+    }
+  }
 
   // ============= MERCADOPAGO =============
   async createMercadoPagoOrder(
@@ -141,110 +205,13 @@ export class PaymentsService {
   async createMercadoPagoOrderMx(
     createMercadoPagoOrderDto: CreateMercadoPagoOrderDto,
   ): Promise<any> {
-    try {
-      const user = await this.usersRepository.findOne({
-        where: { id: createMercadoPagoOrderDto.userId },
-      });
-
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      const client = new MercadoPagoConfig({
-        accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN_MX,
-      });
-      const preferenceClient = new Preference(client);
-
-      const mepagoSuccessUrlMx = process.env.MERCADOPAGO_SUCCESS_URL_MX;
-      const mepagoFailureUrlMx = process.env.MERCADOPAGO_FAILURE_URL_MX;
-      const mepagoPendingUrlMx = process.env.MERCADOPAGO_PENDING_URL_MX;
-      const shouldUseAutoReturnMx =
-        process.env.NODE_ENV === 'production' &&
-        mepagoSuccessUrlMx &&
-        !mepagoSuccessUrlMx.includes('localhost') &&
-        !mepagoSuccessUrlMx.includes('127.0.0.1');
-
-      const response = await preferenceClient.create({
-        body: {
-          items: [
-            {
-              id: 'chips',
-              title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
-              unit_price: parseFloat(createMercadoPagoOrderDto.price),
-              quantity: 1,
-              currency_id: 'MXN',
-            },
-          ],
-          payer: {
-            email: user.email,
-          },
-          payment_methods: {
-            excluded_payment_types: [
-              { id: 'digital_currency' },
-              { id: 'digital_wallet' },
-            ],
-            installments: 1,
-          },
-          back_urls: {
-            success: mepagoSuccessUrlMx,
-            failure: mepagoFailureUrlMx,
-            pending: mepagoPendingUrlMx,
-          },
-          ...(shouldUseAutoReturnMx ? { auto_return: 'approved' } : {}),
-          external_reference: createMercadoPagoOrderDto.userId,
-          metadata: {
-            chips: createMercadoPagoOrderDto.chips,
-          },
-        },
-      });
-
-      return {
-        orderId: response.id,
-        initPoint: process.env.NODE_ENV === 'production'
-          ? response.init_point
-          : response.sandbox_init_point,
-      };
-    } catch (error: any) {
-      const errorMessage =
-        error?.response?.body?.message || error?.message || 'Unknown MercadoPago MX error';
-      this.logger.error('MercadoPago MX Order Creation Error:', errorMessage, error);
-      throw new BadRequestException('Failed to create MercadoPago MX order');
-    }
+    // Removed: consolidated into createMercadoPagoOrder
+    throw new BadRequestException('MX-specific endpoint removed. Use /mepago/create-order with currency="MXN"');
   }
 
   async handleMercadoPagoWebhookMx(data: any): Promise<void> {
-    try {
-      if (data.type === 'payment') {
-        const mpClient = new MercadoPagoConfig({
-          accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN_MX,
-        });
-
-        const paymentData = await mpClient.payment.findById(data.data.id);
-        const payment = paymentData.body;
-
-        if (payment.status === 'approved') {
-          const userId = payment.external_reference;
-          const chips = payment.metadata?.chips || 0;
-          const user = await this.usersRepository.findOne({ where: { id: userId } });
-
-          if (user) {
-            user.chips = (user.chips || 0) + chips;
-            await this.usersRepository.save(user);
-
-            await this.paymentsRepository.create({
-              paymentId: payment.id,
-              userId,
-              chips,
-              price: payment.transaction_amount.toString(),
-              paymentPlatform: 'mepago_mx',
-              date: new Date().toISOString(),
-            });
-          }
-        }
-      }
-    } catch (error) {
-      this.logger.error('MercadoPago MX Webhook Error:', error);
-    }
+    // Removed: webhook handling consolidated to handleMercadoPagoWebhook
+    this.logger.warn('handleMercadoPagoWebhookMx called but endpoint is removed.');
   }
 
   // ============= PAYPAL =============

@@ -7,7 +7,9 @@ import {
   HttpCode,
   HttpStatus,
   ParseUUIDPipe,
+  Res,
 } from '@nestjs/common';
+import { Response } from 'express';
 import {
   ApiTags,
   ApiOperation,
@@ -15,23 +17,43 @@ import {
   ApiParam,
 } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
-import { CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
+import { CreateOrderDto, CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
 
 @ApiTags('Payments')
 @Controller()
 export class PaymentsController {
   constructor(private paymentsService: PaymentsService) {}
 
+  // ============= UNIFIED MERCADOPAGO CREATION =============
+  @Post('create-order')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create a MercadoPago order',
+    description: 'Creates a MercadoPago order with automatic currency detection based on user country.',
+  })
+  @ApiResponse({ status: 201, description: 'Order created successfully' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 400, description: 'Invalid request' })
+  async createMercadoPagoOrderUnified(@Body() createOrderDto: CreateOrderDto) {
+    return this.paymentsService.createMercadoPagoOrderUnified(createOrderDto);
+  }
+
   // ============= MERCADOPAGO =============
   @Post('mepago/create-order')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create MercadoPago order (USD)' })
+  @ApiOperation({ summary: 'Create MercadoPago order' })
   @ApiResponse({ status: 201, description: 'Order created successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async createMercadoPagoOrder(
     @Body() createMercadoPagoOrderDto: CreateMercadoPagoOrderDto,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.paymentsService.createMercadoPagoOrder(createMercadoPagoOrderDto);
+    const result = await this.paymentsService.createMercadoPagoOrder(createMercadoPagoOrderDto);
+    const mpToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+    if (mpToken) {
+      res.setHeader('x-mercadopago-access-token', mpToken);
+    }
+    return result;
   }
 
   @Post('mepago/webhook')
@@ -39,26 +61,6 @@ export class PaymentsController {
   @ApiOperation({ summary: 'MercadoPago webhook' })
   async handleMercadoPagoWebhook(@Body() data: any) {
     await this.paymentsService.handleMercadoPagoWebhook(data);
-    return { status: 'received' };
-  }
-
-  // ============= MERCADOPAGO MEXICO =============
-  @Post('mepago/create-order/mx')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Create MercadoPago order (MXN)' })
-  @ApiResponse({ status: 201, description: 'Order created successfully' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async createMercadoPagoOrderMx(
-    @Body() createMercadoPagoOrderDto: CreateMercadoPagoOrderDto,
-  ) {
-    return this.paymentsService.createMercadoPagoOrderMx(createMercadoPagoOrderDto);
-  }
-
-  @Post('mepago/webhook/mx')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'MercadoPago MX webhook' })
-  async handleMercadoPagoWebhookMx(@Body() data: any) {
-    await this.paymentsService.handleMercadoPagoWebhookMx(data);
     return { status: 'received' };
   }
 

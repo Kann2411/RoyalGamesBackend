@@ -1,8 +1,11 @@
-import { IsUUID, IsNumber, IsString, Min } from 'class-validator';
+import { IsUUID, IsNumber, IsString, IsOptional, Min } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 
-export class CreatePaymentDto {
-  @ApiProperty({ example: '123e4567-e89b-12d3-a456-426614174000', description: 'User ID' })
+export class CreateOrderDto {
+  @ApiProperty({
+    example: '123e4567-e89b-12d3-a456-426614174000',
+    description: 'User ID',
+  })
   @IsUUID()
   userId: string;
 
@@ -11,13 +14,26 @@ export class CreatePaymentDto {
   @Min(1)
   chips: number;
 
-  @ApiProperty({ example: '10.00', description: 'Price in currency' })
+  @ApiProperty({ example: '10.00', description: 'Price in local currency' })
   @IsString()
   price: string;
 
-  @ApiProperty({ example: 'mepago', description: 'Payment platform' })
+  @ApiProperty({
+    example: 'mepago',
+    description: 'Payment platform (mepago or paypal)',
+    enum: ['mepago', 'paypal'],
+  })
   @IsString()
   paymentPlatform: string;
+
+  @ApiProperty({
+    example: 'COP',
+    description: 'Optional: Currency code. If not provided, will be determined by user country',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  currency?: string;
 }
 
 export class CreateMercadoPagoOrderDto {

@@ -96,8 +96,7 @@ GET    /chips/:userId                 # Get user chips balance
 ```
 POST   /payments/mepago/create-order        # Create MercadoPago order (USD)
 POST   /payments/mepago/webhook             # MercadoPago webhook handler
-POST   /payments/mepago/create-order/mx     # Create MercadoPago order (MXN)
-POST   /payments/mepago/webhook/mx          # MercadoPago MX webhook
+<!-- MX-specific endpoints removed. Use POST /payments/mepago/create-order with currency parameter -->
 POST   /payments/paypal/create-order        # Create PayPal order
 POST   /payments/paypal/capture-order       # Capture PayPal order
 GET    /payments                            # Get all payments
