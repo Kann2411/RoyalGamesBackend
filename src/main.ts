@@ -35,7 +35,7 @@ async function bootstrap() {
   app.use(
     cors({
       origin: [
-        'https://www.royalgames.me',
+        'https://royal-front-new.vercel.app/',
         'http://localhost:5173',
         'https://html-classic.itch.zone',
       ],
