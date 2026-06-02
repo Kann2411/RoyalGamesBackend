@@ -22,6 +22,5 @@ export const typeormConfig = (): TypeOrmModuleOptions => {
     logging: process.env.NODE_ENV === 'development',
     // Use explicit DB_SSL flag to avoid attempting SSL against servers that don't support it
     ssl: useSsl ? { rejectUnauthorized: false } : false,
-    url: process.env.DATABASE_URL,
   };
 };
