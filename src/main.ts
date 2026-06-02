@@ -6,6 +6,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import morgan from 'morgan';
 import cors from 'cors';
+import MercadoPagoConfig from 'mercadopago';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -23,6 +24,11 @@ async function bootstrap() {
 
   validateEnv();
   const app = await NestFactory.create(AppModule);
+
+  // MercadoPago Configuration
+  const mercadoPagoClient = new MercadoPagoConfig({
+    accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+  });
 
   // Middleware
   app.use(morgan('dev'));

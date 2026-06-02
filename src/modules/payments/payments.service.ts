@@ -106,11 +106,13 @@ export class PaymentsService {
       const mepagoSuccessUrl = process.env.MERCADOPAGO_SUCCESS_URL;
       const mepagoFailureUrl = process.env.MERCADOPAGO_FAILURE_URL;
       const mepagoPendingUrl = process.env.MERCADOPAGO_PENDING_URL;
-      const shouldUseAutoReturn =
-        process.env.NODE_ENV === 'production' &&
-        mepagoSuccessUrl &&
-        !mepagoSuccessUrl.includes('localhost') &&
+      
+      // Verificar si tenemos URLs válidas (no localhost/127.0.0.1)
+      const hasValidBackUrls = mepagoSuccessUrl && 
+        !mepagoSuccessUrl.includes('localhost') && 
         !mepagoSuccessUrl.includes('127.0.0.1');
+      
+      const isProduction = process.env.NODE_ENV === 'production';
 
       const currencyId = (createMercadoPagoOrderDto.currency || 'COP').toUpperCase();
       const supportedCurrencies = ['COP', 'MXN', 'USD', 'ARS', 'BRL', 'EUR'];
@@ -139,12 +141,15 @@ export class PaymentsService {
             ],
             installments: 1,
           },
-          back_urls: {
-            success: mepagoSuccessUrl,
-            failure: mepagoFailureUrl,
-            pending: mepagoPendingUrl,
-          },
-          ...(shouldUseAutoReturn ? { auto_return: 'approved' } : {}),
+          // Solo incluir back_urls si tenemos URLs válidas
+          ...(hasValidBackUrls ? {
+            back_urls: {
+              success: mepagoSuccessUrl,
+              failure: mepagoFailureUrl,
+              pending: mepagoPendingUrl,
+            },
+            ...(isProduction ? { auto_return: 'approved' } : {}),
+          } : {}),
           external_reference: createMercadoPagoOrderDto.userId,
           metadata: {
             chips: createMercadoPagoOrderDto.chips,
@@ -154,7 +159,7 @@ export class PaymentsService {
 
       return {
         orderId: response.id,
-        initPoint: process.env.NODE_ENV === 'production'
+        initPoint: isProduction
           ? response.init_point
           : response.sandbox_init_point,
       };
