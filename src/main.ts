@@ -23,25 +23,45 @@ async function bootstrap() {
   };
 
   validateEnv();
-  const app = await NestFactory.create(AppModule);
+  
+  // Log environment info
+  console.log('Environment Info:');
+  console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
+  console.log(`PORT: ${process.env.PORT || 3001}`);
+  console.log(`DB_HOST: ${process.env.DB_HOST || 'not set'}`);
+  console.log(`DB_NAME: ${process.env.DB_NAME || 'not set'}`);
+  console.log(`DATABASE_URL configured: ${!!process.env.DATABASE_URL}`);
+  console.log(`JWT_SECRET configured: ${!!process.env.JWT_SECRET}`);
+  
+  const app = await NestFactory.create(AppModule, {
+    logger: ['log', 'error', 'warn', 'debug'],
+  });
 
   // MercadoPago Configuration
-  const mercadoPagoClient = new MercadoPagoConfig({
-    accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
-  });
+  try {
+    const mercadoPagoClient = new MercadoPagoConfig({
+      accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+    });
+    console.log('✅ MercadoPago configured');
+  } catch (error: any) {
+    console.warn('⚠️ MercadoPago configuration warning:', error.message);
+  }
 
   // Middleware
   app.use(morgan('dev'));
-  app.use(
-    cors({
-      origin: [
-        'https://royal-front-new.vercel.app',
-        'http://localhost:5173',
-        'https://html-classic.itch.zone',
-      ],
-      credentials: true,
-    }),
-  );
+  
+  // Enhanced CORS Configuration
+  app.enableCors({
+    origin: [
+      'https://royal-front-new.vercel.app',
+      'http://localhost:5173',
+      'https://html-classic.itch.zone',
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'Accept'],
+    optionsSuccessStatus: 200,
+  });
 
   // Global Pipes
   app.useGlobalPipes(
@@ -72,11 +92,21 @@ async function bootstrap() {
   const port = process.env.PORT || 3001;
   await app.listen(port);
 
-  console.log(`🚀 Server running on http://localhost:${port}`);
+  console.log(`\n✅ 🚀 Server running on http://localhost:${port}`);
   console.log(`📚 Swagger documentation available at http://localhost:${port}/api/docs`);
+  console.log(`❤️  Health check at http://localhost:${port}/health\n`);
 }
 
 bootstrap().catch((error) => {
-  console.error('Failed to start application:', error);
+  console.error('\n❌ Failed to start application:');
+  console.error('Error type:', error.constructor.name);
+  console.error('Error message:', error.message);
+  if (error.stack) {
+    console.error('Stack trace:', error.stack);
+  }
+  console.error('\nDebug info:');
+  console.error('DATABASE_URL set:', !!process.env.DATABASE_URL);
+  console.error('JWT_SECRET set:', !!process.env.JWT_SECRET);
+  console.error('NODE_ENV:', process.env.NODE_ENV);
   process.exit(1);
 });

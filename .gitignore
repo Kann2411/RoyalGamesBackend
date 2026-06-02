@@ -2,6 +2,7 @@
 node_modules/
 dist/
 build/
+DEPLOYMENT_CHECKLIST.md
 
 # Environment
 .env
