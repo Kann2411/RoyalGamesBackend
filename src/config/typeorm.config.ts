@@ -17,8 +17,8 @@ export const typeormConfig = (): TypeOrmModuleOptions => {
     database: process.env.DB_NAME || 'rgames',
     entities: [path.join(__dirname, `../modules/**/entities/*.entity${ext}`)],
     migrations: [path.join(__dirname, `../migrations/*${ext}`)],
-    synchronize: true,
-    dropSchema: true,
+    synchronize: false,
+    dropSchema: false,
     logging: process.env.NODE_ENV === 'development',
     // Use explicit DB_SSL flag to avoid attempting SSL against servers that don't support it
     ssl: useSsl ? { rejectUnauthorized: false } : false,
