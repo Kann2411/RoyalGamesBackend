@@ -1,22 +1,44 @@
 import { TypeOrmModuleOptions } from '@nestjs/typeorm';
-import { config as dotenvConfig } from 'dotenv';
-import { DataSource, DataSourceOptions } from 'typeorm';
+import * as path from 'path';
 
-dotenvConfig({ path: '.env' });
+export const typeormConfig = (): TypeOrmModuleOptions => {
+  const isCompiled = path.extname(__filename) === '.js';
+  const ext = isCompiled ? '.js' : '.ts';
+  const nodeEnv = process.env.NODE_ENV || 'development';
+  
+  // Prefer explicit DB_SSL env var. If DB_SSL is not set, default to false for local development.
+  const dbSslEnv = (process.env.DB_SSL || (nodeEnv === 'production' ? 'true' : 'false')).toLowerCase();
+  const useSsl = dbSslEnv === 'true';
 
-const config = {
-  type: 'postgres' as const,
-  host: process.env.DB_HOST,
-  port: parseInt(process.env.DB_PORT || '5432', 10),
-  username: process.env.DB_USER,
-  password: process.env.DB_PASSWORD,
-  database: process.env.DB_NAME,
-  entities: [__dirname + '/../modules/**/entities/*.entity.{js,ts}'],
-  migrations: [__dirname + '/../migrations/**/*.{js,ts}'],
-  autoLoadEntities: true,
-  dropSchema: false,
-  synchronize: process.env.NODE_ENV !== 'production',
-} as TypeOrmModuleOptions;
+  const config: TypeOrmModuleOptions = {
+    type: 'postgres',
+    host: process.env.DB_HOST || 'localhost',
+    port: parseInt(process.env.DB_PORT || '5432'),
+    username: process.env.DB_USER || 'postgres',
+    password: process.env.DB_PASSWORD,
+    database: process.env.DB_NAME || 'rgames',
+    entities: [path.join(__dirname, `../modules/**/entities/*.entity${ext}`)],
+    migrations: [path.join(__dirname, `../migrations/*${ext}`)],
+    synchronize: nodeEnv !== 'production',
+    dropSchema: false,
+    logging: nodeEnv === 'development',
+    // Use explicit DB_SSL flag to avoid attempting SSL against servers that don't support it
+    ssl: useSsl ? { rejectUnauthorized: false } : false,
+    url: process.env.DATABASE_URL,
+    connectTimeoutMS: 10000,
+    extra: {
+      max: 20,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 2000,
+    },
+  };
 
-export const typeormConfig = (): TypeOrmModuleOptions => config;
-export const connectionSource = new DataSource(config as DataSourceOptions);
+  console.log('TypeORM Config:');
+  console.log(`- Environment: ${nodeEnv}`);
+  console.log(`- Using DATABASE_URL: ${!!process.env.DATABASE_URL}`);
+  console.log(`- SSL enabled: ${useSsl}`);
+  console.log(`- Synchronize: ${config.synchronize}`);
+  console.log(`- Logging: ${config.logging}`);
+
+  return config;
+};
