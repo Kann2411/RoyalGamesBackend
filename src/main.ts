@@ -43,7 +43,7 @@ async function bootstrap() {
       accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
     });
     console.log('✅ MercadoPago configured');
-  } catch (error: any) {
+  } catch (error) {
     console.warn('⚠️ MercadoPago configuration warning:', error.message);
   }
 
