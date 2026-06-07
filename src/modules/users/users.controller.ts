@@ -55,7 +55,7 @@ export class UsersController {
     return this.usersService.getAllUsers();
   }
 
-  @Get('by-id/:id')
+  @Get('user/:id')
   @ApiOperation({ summary: 'Get user by ID' })
   @ApiParam({ name: 'id', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User retrieved successfully' })
