@@ -9,5 +9,5 @@ export class ChipsTransactionDto {
   @ApiProperty({ example: 100, description: 'Chips amount' })
   @IsNumber()
   @Min(1)
-  removeChip: number;
+  amount: number;
 }
