@@ -57,4 +57,16 @@ export class UsersRepository {
       relations: ['payments'],
     });
   }
+
+  /**
+   * Atomically grants first chips only if the user hasn't received them yet.
+   * Returns the updated user or null if the row wasn't updated (already received).
+   */
+  async giveFirstChipsAtomic(userId: string, amount: number): Promise<User | null> {
+    const result = await this.repository.query(
+      `UPDATE users SET chips = chips + $1, "firstChips" = true WHERE id = $2 AND ("firstChips" = false OR "firstChips" IS NULL) RETURNING *`,
+      [amount, userId],
+    );
+    return result && result[0] ? (result[0] as User) : null;
+  }
 }

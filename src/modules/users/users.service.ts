@@ -173,19 +173,17 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
 
-    if (user.firstChips) {
+    const FIRST_CHIPS_AMOUNT = 1000000;
+    const updatedUser = await this.usersRepository.giveFirstChipsAtomic(
+      userId,
+      FIRST_CHIPS_AMOUNT,
+    );
+
+    if (!updatedUser) {
+      // If the user exists but no row was updated, they already received first chips
       throw new BadRequestException('User already received first chips');
     }
 
-    const current = Number(user.chips) || 0;
-    const FIRST_CHIPS_AMOUNT = 1000000;
-    const updatedUser = await this.usersRepository.update(userId, {
-      chips: current + FIRST_CHIPS_AMOUNT,
-      firstChips: true,
-    });
-    if (!updatedUser) {
-      throw new NotFoundException('User not found');
-    }
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;
   }
