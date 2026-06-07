@@ -13,7 +13,8 @@ export class ChipsRepository {
   async addChips(userId: string, amount: number): Promise<User | null> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (user) {
-      user.chips = (user.chips || 0) + amount;
+      const current = Number(user.chips) || 0;
+      user.chips = current + Number(amount);
       return this.usersRepository.save(user);
     }
     return null;
@@ -22,7 +23,8 @@ export class ChipsRepository {
   async removeChips(userId: string, amount: number): Promise<User | null> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (user) {
-      user.chips = Math.max(0, (user.chips || 0) - amount);
+      const current = Number(user.chips) || 0;
+      user.chips = Math.max(0, current - Number(amount));
       return this.usersRepository.save(user);
     }
     return null;
@@ -30,6 +32,6 @@ export class ChipsRepository {
 
   async getChips(userId: string): Promise<number> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
-    return user ? user.chips || 0 : 0;
+    return user ? Number(user.chips) || 0 : 0;
   }
 }
