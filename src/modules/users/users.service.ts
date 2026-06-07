@@ -177,8 +177,10 @@ export class UsersService {
       throw new BadRequestException('User already received first chips');
     }
 
+    const current = Number(user.chips) || 0;
+    const FIRST_CHIPS_AMOUNT = 1000000;
     const updatedUser = await this.usersRepository.update(userId, {
-      chips: (user.chips || 0) + 100,
+      chips: current + FIRST_CHIPS_AMOUNT,
       firstChips: true,
     });
     if (!updatedUser) {
