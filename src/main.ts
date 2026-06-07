@@ -38,6 +38,9 @@ async function bootstrap() {
         'https://royal-front-new.vercel.app',
         'http://localhost:5173',
         'https://html-classic.itch.zone',
+        'https://minas2royal.s3.us-east-2.amazonaws.com',
+        'https://us-east-2.console.aws.amazon.com',
+        'https://aws.amazon.com'
       ],
       credentials: true,
     }),
