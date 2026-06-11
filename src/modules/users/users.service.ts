@@ -32,11 +32,15 @@ export class UsersService {
       createUserDto.password,
     );
 
+    // Contar usuarios existentes para determinar si debe recibir chips iniciales
+    const allUsers = await this.usersRepository.findAll();
+    const initialChips = allUsers.length < 100 ? 1000000 : 0;
+
     const user = await this.usersRepository.create({
       ...createUserDto,
       email: emailLowerCase,
       password: hashedPassword,
-      chips: 0,
+      chips: initialChips,
       firstChips: false,
     });
 

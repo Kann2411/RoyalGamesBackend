@@ -1,17 +1,24 @@
 import {
   Entity,
-  PrimaryColumn,
   Column,
   CreateDateColumn,
   ManyToOne,
   JoinColumn,
+  PrimaryGeneratedColumn,
 } from 'typeorm';
 import { User } from '../../users/entities/user.entity';
+import { PaymentStatus } from '../enums/payment-status.enum';
 
 @Entity('pays')
 export class Pay {
-  @PrimaryColumn({ type: 'bigint' })
-  paymentId: number;
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
+
+  @Column({ type: 'varchar', nullable: true })
+  mercadoPagoPaymentId: string;
+
+  @Column({ type: 'varchar', nullable: true })
+  mercadoPagoPreferenceId: string;
 
   @Column({ type: 'varchar', nullable: true })
   paymentPlatform: string;
@@ -24,6 +31,13 @@ export class Pay {
 
   @Column({ type: 'uuid' })
   userId: string;
+
+  @Column({
+    type: 'enum',
+    enum: PaymentStatus,
+    default: PaymentStatus.PENDING,
+  })
+  status: PaymentStatus;
 
   @Column({ type: 'varchar', nullable: true })
   date: string;
