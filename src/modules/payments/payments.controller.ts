@@ -4,10 +4,13 @@ import {
   Get,
   Body,
   Param,
+  Query,
   HttpCode,
   HttpStatus,
   ParseUUIDPipe,
   Res,
+  UseGuards,
+  Redirect,
 } from '@nestjs/common';
 import { Response } from 'express';
 import {
@@ -18,6 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import { CreateOrderDto, CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @ApiTags('Payments')
 @Controller()
@@ -27,6 +31,7 @@ export class PaymentsController {
   // ============= UNIFIED MERCADOPAGO CREATION =============
   @Post('create-order')
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({
     summary: 'Create a MercadoPago order',
     description: 'Creates a MercadoPago order with automatic currency detection based on user country.',
@@ -41,6 +46,7 @@ export class PaymentsController {
   // ============= MERCADOPAGO =============
   @Post('mepago/create-order')
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Create MercadoPago order' })
   @ApiResponse({ status: 201, description: 'Order created successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
@@ -59,14 +65,46 @@ export class PaymentsController {
   @Post('mepago/webhook')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'MercadoPago webhook' })
-  async handleMercadoPagoWebhook(@Body() data: any) {
-    await this.paymentsService.handleMercadoPagoWebhook(data);
+  async handleMercadoPagoWebhook(
+    @Body() data: any,
+    @Query('id') merchantOrderId?: string,
+    @Query('topic') topic?: string,
+  ) {
+    await this.paymentsService.handleMercadoPagoWebhook(data, {
+      merchantOrderId,
+      topic,
+    });
     return { status: 'received' };
+  }
+
+  @Get('mepago/success')
+  @ApiOperation({ summary: 'MercadoPago success redirect' })
+  @Redirect('http://localhost:3000/payment/success', 301)
+  async mercadoPagoSuccess(@Query() query: any) {
+    // MercadoPago redirects here after approved payment
+    return { url: 'http://localhost:3000/payment/success' };
+  }
+
+  @Get('mepago/failure')
+  @ApiOperation({ summary: 'MercadoPago failure redirect' })
+  @Redirect('http://localhost:3000/payment/failure', 301)
+  async mercadoPagoFailure(@Query() query: any) {
+    // MercadoPago redirects here after failed payment
+    return { url: 'http://localhost:3000/payment/failure' };
+  }
+
+  @Get('mepago/pending')
+  @ApiOperation({ summary: 'MercadoPago pending redirect' })
+  @Redirect('http://localhost:3000/payment/pending', 301)
+  async mercadoPagoPending(@Query() query: any) {
+    // MercadoPago redirects here for pending payments
+    return { url: 'http://localhost:3000/payment/pending' };
   }
 
   // ============= PAYPAL =============
   @Post('paypal/create-order')
   @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Create PayPal order' })
   @ApiResponse({ status: 201, description: 'Order created successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
@@ -76,6 +114,7 @@ export class PaymentsController {
 
   @Post('capture-paypal-order')
   @HttpCode(HttpStatus.OK)
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Capture PayPal order' })
   @ApiResponse({ status: 200, description: 'Order captured successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })

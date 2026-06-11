@@ -1,13 +1,14 @@
-import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import axios from 'axios';
 import * as paypalCheckoutServerSdk from '@paypal/checkout-server-sdk';
 import MercadoPagoConfig, { Preference } from 'mercadopago';
-import { Repository } from 'typeorm';
-import { InjectRepository } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { User } from '../users/entities/user.entity';
 import { Pay } from './entities/pay.entity';
 import { CreateOrderDto, CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
 import { PaymentsRepository } from './repositories/payments.repository';
+import { PaymentStatus } from './enums/payment-status.enum';
 
 @Injectable()
 export class PaymentsService {
@@ -42,6 +43,8 @@ export class PaymentsService {
     private usersRepository: Repository<User>,
     @InjectRepository(Pay)
     private payRepository: Repository<Pay>,
+    @InjectDataSource()
+    private dataSource: DataSource,
   ) {}
 
   /**
@@ -113,18 +116,25 @@ export class PaymentsService {
         !mepagoSuccessUrl.includes('127.0.0.1');
       
       const isProduction = process.env.NODE_ENV === 'production';
+      const isDevelopment = process.env.NODE_ENV !== 'production';
 
-      const currencyId = (createMercadoPagoOrderDto.currency || 'COP').toUpperCase();
+      const currencyId = (createMercadoPagoOrderDto.currency).toUpperCase();
       const supportedCurrencies = ['COP', 'MXN', 'USD', 'ARS', 'BRL', 'EUR'];
       if (!supportedCurrencies.includes(currencyId)) {
         throw new BadRequestException(`Unsupported MercadoPago currency: ${currencyId}`);
+      }
+
+      // En desarrollo, log las URLs para debugging
+      if (isDevelopment) {
+        this.logger.debug(`MercadoPago URLs - Success: ${mepagoSuccessUrl}, Notification: ${process.env.MERCADOPAGO_NOTIFICATION_URL}`);
+        this.logger.warn('⚠️ Running in DEVELOPMENT: Use NGROK for back_urls and webhook. Run: ngrok http 3001');
       }
 
       const response = await preferenceClient.create({
         body: {
           items: [
             {
-              id: 'chips',
+              id: `${createMercadoPagoOrderDto.userId}-${Date.now()}`,
               title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
               unit_price: parseFloat(createMercadoPagoOrderDto.price),
               quantity: 1,
@@ -132,6 +142,7 @@ export class PaymentsService {
             },
           ],
           payer: {
+            name: user.nick || 'Player',
             email: user.email,
           },
           payment_methods: {
@@ -148,14 +159,29 @@ export class PaymentsService {
               failure: mepagoFailureUrl,
               pending: mepagoPendingUrl,
             },
-            ...(isProduction ? { auto_return: 'approved' } : {}),
+            auto_return: 'approved',
           } : {}),
           external_reference: createMercadoPagoOrderDto.userId,
+          ...(process.env.MERCADOPAGO_NOTIFICATION_URL ? {
+            notification_url: process.env.MERCADOPAGO_NOTIFICATION_URL,
+          } : {}),
           metadata: {
             chips: createMercadoPagoOrderDto.chips,
           },
         },
       });
+
+      // Crear registro de pago PENDIENTE con preferenceId
+      const pagoDb = this.payRepository.create({
+        userId: createMercadoPagoOrderDto.userId,
+        chips: createMercadoPagoOrderDto.chips,
+        price: createMercadoPagoOrderDto.price,
+        paymentPlatform: 'mepago',
+        mercadoPagoPreferenceId: response.id,
+        status: PaymentStatus.PENDING,
+        date: new Date().toISOString(),
+      });
+      await this.paymentsRepository.create(pagoDb);
 
       return {
         orderId: response.id,
@@ -171,38 +197,230 @@ export class PaymentsService {
     }
   }
 
-  async handleMercadoPagoWebhook(data: any): Promise<void> {
+  async handleMercadoPagoWebhook(data: any, queryParams?: any): Promise<void> {
     try {
-      if (data.type === 'payment') {
+      // Manejo de merchant_order (webhook con query params: ?id=&topic=merchant_order)
+      if (queryParams?.topic === 'merchant_order' && queryParams?.merchantOrderId) {
+        this.logger.debug(`Merchant Order webhook received: ${queryParams.merchantOrderId}`);
+        await this.processMercadoPagoMerchantOrder(queryParams.merchantOrderId);
+        return;
+      }
+
+      // Manejo de payment webhook (JSON body)
+      if (!data || !data.type || data.type !== 'payment') {
+        this.logger.warn(`Invalid webhook data format. Expected type=payment, got: ${data?.type}`);
+        return;
+      }
+
+      if (!data.data || !data.data.id) {
+        this.logger.warn('Missing payment ID in webhook');
+        return;
+      }
+
+      // Usar transacción para garantizar consistencia
+      return await this.dataSource.manager.transaction(async (manager) => {
         const mpClient = new MercadoPagoConfig({
           accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
         });
 
-        const paymentData = await mpClient.payment.findById(data.data.id);
-        const payment = paymentData.body;
+        try {
+          const paymentData = await mpClient.payment.findById(data.data.id);
+          const payment = paymentData.body;
 
-        if (payment.status === 'approved') {
+          if (!payment) {
+            this.logger.error('Payment not found in MercadoPago');
+            return;
+          }
+
           const userId = payment.external_reference;
           const chips = payment.metadata?.chips || 0;
-          const user = await this.usersRepository.findOne({ where: { id: userId } });
+          const preferenceId = payment.order?.id || payment.preference_id;
 
-          if (user) {
-            user.chips = (user.chips || 0) + chips;
-            await this.usersRepository.save(user);
-
-            await this.paymentsRepository.create({
-              paymentId: payment.id,
-              userId,
-              chips,
-              price: payment.transaction_amount.toString(),
-              paymentPlatform: 'mepago',
-              date: new Date().toISOString(),
-            });
+          if (!userId || !chips) {
+            this.logger.warn('Missing userId or chips in payment metadata');
+            return;
           }
+
+          const user = await manager.findOne(User, { where: { id: userId } });
+          if (!user) {
+            this.logger.error(`User not found: ${userId}`);
+            return;
+          }
+
+          // Buscar pago existente por mercadoPagoPaymentId (para evitar duplicados)
+          const existingPaymentByPaymentId = await manager.findOne(Pay, {
+            where: { mercadoPagoPaymentId: payment.id },
+          });
+
+          if (existingPaymentByPaymentId) {
+            // Pago ya fue procesado
+            this.logger.debug(`Payment ${payment.id} already processed`);
+            return;
+          }
+
+          // Buscar pago PENDIENTE por userId + preferenceId para actualizar
+          const pendingPayment = await manager.findOne(Pay, {
+            where: {
+              userId,
+              status: PaymentStatus.PENDING,
+            },
+            order: { createdAt: 'DESC' }, // Obtener el más reciente
+          });
+
+          if (payment.status === 'approved') {
+            // Actualizar usuario con chips
+            user.chips = (user.chips || 0) + chips;
+            await manager.save(User, user);
+
+            if (pendingPayment) {
+              // Actualizar orden pendiente existente
+              pendingPayment.status = PaymentStatus.APPROVED;
+              pendingPayment.mercadoPagoPaymentId = payment.id;
+              pendingPayment.date = new Date().toISOString();
+              await manager.save(Pay, pendingPayment);
+
+              this.logger.log(`Payment approved for user ${userId}: +${chips} chips`);
+            } else {
+              // Si no hay pendiente, crear uno nuevo (por si llega webhook de payment sin crear orden primero)
+              const newPayment = manager.create(Pay, {
+                userId,
+                chips,
+                price: payment.transaction_amount?.toString() || '0',
+                paymentPlatform: 'mepago',
+                mercadoPagoPaymentId: payment.id,
+                mercadoPagoPreferenceId: preferenceId || payment.id,
+                status: PaymentStatus.APPROVED,
+                date: new Date().toISOString(),
+              });
+              await manager.save(Pay, newPayment);
+
+              this.logger.log(
+                `Payment approved for user ${userId}: +${chips} chips (created new record)`,
+              );
+            }
+          } else if (payment.status === 'rejected') {
+            // Actualizar estado a rechazado
+            if (pendingPayment) {
+              pendingPayment.status = PaymentStatus.REJECTED;
+              pendingPayment.mercadoPagoPaymentId = payment.id;
+              await manager.save(Pay, pendingPayment);
+            }
+            this.logger.warn(`Payment rejected for user ${userId}`);
+          } else if (payment.status === 'cancelled') {
+            // Actualizar estado a cancelado
+            if (pendingPayment) {
+              pendingPayment.status = PaymentStatus.CANCELLED;
+              pendingPayment.mercadoPagoPaymentId = payment.id;
+              await manager.save(Pay, pendingPayment);
+            }
+            this.logger.warn(`Payment cancelled for user ${userId}`);
+          }
+        } catch (mpError) {
+          this.logger.error('Error querying MercadoPago API:', mpError);
+          throw mpError;
         }
-      }
+      });
     } catch (error) {
       this.logger.error('MercadoPago Webhook Error:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Procesa merchant_order webhooks de MercadoPago
+   * Este tipo de webhook se envía cuando cambia el estado de una orden
+   */
+  private async processMercadoPagoMerchantOrder(merchantOrderId: string): Promise<void> {
+    try {
+      // Obtener merchant order directamente de la API de MercadoPago
+      const merchantOrderUrl = `https://api.mercadopago.com/merchant_orders/${merchantOrderId}`;
+      const response = await axios.get(merchantOrderUrl, {
+        headers: {
+          Authorization: `Bearer ${process.env.MERCADOPAGO_ACCESS_TOKEN}`,
+        },
+      });
+
+      const merchantOrder = response.data;
+
+      if (!merchantOrder || !merchantOrder.payments || merchantOrder.payments.length === 0) {
+        this.logger.debug(
+          `Merchant order ${merchantOrderId} has no payments yet (user may have cancelled)`,
+        );
+        return;
+      }
+
+      // Procesar el pago más reciente/exitoso
+      const approvedPayment = merchantOrder.payments.find(
+        (p: any) => p.status === 'approved' || p.status === 'authorized',
+      );
+
+      if (!approvedPayment) {
+        this.logger.warn(`No approved payment found in merchant order ${merchantOrderId}`);
+        return;
+      }
+
+      // Obtener detalles del pago
+      const mpClient = new MercadoPagoConfig({
+        accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+      });
+
+      const paymentData = await mpClient.payment.findById(approvedPayment.id);
+      const payment = paymentData.body;
+
+      if (!payment) {
+        this.logger.error('Payment not found in MercadoPago');
+        return;
+      }
+
+      const userId = payment.external_reference;
+      const chips = payment.metadata?.chips || 0;
+
+      if (!userId || !chips) {
+        this.logger.warn('Missing userId or chips in payment metadata');
+        return;
+      }
+
+      await this.dataSource.manager.transaction(async (manager) => {
+        const user = await manager.findOne(User, { where: { id: userId } });
+        if (!user) {
+          this.logger.error(`User not found: ${userId}`);
+          return;
+        }
+
+        // Buscar pago existente por mercadoPagoPaymentId
+        const existingPayment = await manager.findOne(Pay, {
+          where: { mercadoPagoPaymentId: payment.id },
+        });
+
+        if (!existingPayment) {
+          // Crear pago nuevo
+          const newPayment = manager.create(Pay, {
+            userId,
+            chips,
+            price: payment.transaction_amount?.toString() || '0',
+            paymentPlatform: 'mepago',
+            mercadoPagoPaymentId: payment.id,
+            mercadoPagoPreferenceId: merchantOrderId,
+            status: PaymentStatus.APPROVED,
+            date: new Date().toISOString(),
+          });
+
+          await manager.save(Pay, newPayment);
+
+          // Actualizar chips del usuario
+          user.chips = (user.chips || 0) + chips;
+          await manager.save(User, user);
+
+          this.logger.log(
+            `Merchant Order processed - Payment approved for user ${userId}: +${chips} chips`,
+          );
+        } else {
+          this.logger.debug(`Payment ${payment.id} already processed, skipping`);
+        }
+      });
+    } catch (error) {
+      this.logger.error('Error processing MercadoPago merchant order:', error);
+      // No lanzar error para evitar reintentos infinitos del webhook
     }
   }
 
@@ -291,17 +509,32 @@ export class PaymentsService {
       const response = await client.execute(request);
 
       if (response.result.status === 'COMPLETED') {
-        user.chips = (user.chips || 0) + capturePayPalOrderDto.chips;
-        await this.usersRepository.save(user);
+        // Usar transacción para actualizar usuario y crear pago
+        return await this.dataSource.manager.transaction(async (manager) => {
+          const transactionUser = await manager.findOne(User, {
+            where: { id: capturePayPalOrderDto.userId },
+          });
 
-        const paymentId = Math.floor(Math.random() * 1000000000000);
-        await this.paymentsRepository.create({
-          paymentId,
-          userId: capturePayPalOrderDto.userId,
-          chips: capturePayPalOrderDto.chips,
-          price: capturePayPalOrderDto.price,
-          paymentPlatform: 'paypal',
-          date: new Date().toISOString(),
+          if (transactionUser) {
+            transactionUser.chips = (transactionUser.chips || 0) + capturePayPalOrderDto.chips;
+            await manager.save(User, transactionUser);
+          }
+
+          const paymentId = response.result.id;
+          await manager.save(
+            Pay,
+            manager.create(Pay, {
+              userId: capturePayPalOrderDto.userId,
+              chips: capturePayPalOrderDto.chips,
+              price: capturePayPalOrderDto.price,
+              paymentPlatform: 'paypal',
+              mercadoPagoPaymentId: paymentId,
+              status: PaymentStatus.APPROVED,
+              date: new Date().toISOString(),
+            }),
+          );
+
+          this.logger.log(`PayPal payment captured for user ${capturePayPalOrderDto.userId}: +${capturePayPalOrderDto.chips} chips`);
         });
       }
 
