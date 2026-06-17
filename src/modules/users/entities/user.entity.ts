@@ -8,6 +8,9 @@ import {
 } from 'typeorm';
 import { Game } from '../../games/entities/game.entity';
 import { Pay } from '../../payments/entities/pay.entity';
+import { Withdrawal } from '../../withdrawals/entities/withdrawal.entity';
+import { Bet } from '../../bets/entities/bet.entity';
+import { PromoCode } from '../../promo-codes/entities/promo-code.entity';
 import { Role } from '../../../common/enums/role.enum';
 
 @Entity('users')
@@ -39,8 +42,11 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   country: string;
 
-  @Column({ type: 'varchar' })
+  @Column({ type: 'varchar', nullable: true })
   sexo: string;
+
+  @Column({ type: 'varchar', nullable: true })
+  phone: string;
 
   @Column({ type: 'bigint', default: 0 })
   chips: number;
@@ -65,4 +71,13 @@ export class User {
 
   @OneToMany(() => Pay, (pay) => pay.user, { cascade: true })
   payments: Pay[];
+
+  @OneToMany(() => Withdrawal, (withdrawal) => withdrawal.user, { cascade: true })
+  withdrawals: Withdrawal[];
+
+  @OneToMany(() => Bet, (bet) => bet.user, { cascade: true })
+  bets: Bet[];
+
+  @ManyToMany(() => PromoCode, (promoCode) => promoCode.usedByUsers)
+  promoCodes: PromoCode[];
 }

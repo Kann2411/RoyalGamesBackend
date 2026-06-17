@@ -26,7 +26,7 @@ import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 @ApiTags('Payments')
 @Controller()
 export class PaymentsController {
-  constructor(private paymentsService: PaymentsService) {}
+  constructor(private paymentsService: PaymentsService) { }
 
   // ============= UNIFIED MERCADOPAGO CREATION =============
   @Post('create-order')
@@ -46,7 +46,7 @@ export class PaymentsController {
   // ============= MERCADOPAGO =============
   @Post('mepago/create-order')
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(JwtAuthGuard)
+  // @UseGuards(JwtAuthGuard) ------------FALTA MANEJAR EL ROL QUE ESTA EN EL TOKEN DESDE EL FRONTEND-------------
   @ApiOperation({ summary: 'Create MercadoPago order' })
   @ApiResponse({ status: 201, description: 'Order created successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
