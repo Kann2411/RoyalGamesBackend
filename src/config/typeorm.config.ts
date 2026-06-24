@@ -12,7 +12,7 @@ const config = {
   username: process.env.DB_USER,
   password: process.env.DB_PASSWORD,
   autoLoadEntities: true,
-  dropSchema: false,
+  dropSchema: true,
   synchronize: false,
   logging: process.env.NODE_ENV === 'development',
   ssl:
