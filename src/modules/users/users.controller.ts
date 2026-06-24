@@ -9,10 +9,13 @@ import {
   Param,
   Query,
   UseGuards,
+  UseInterceptors,
   ParseUUIDPipe,
   HttpStatus,
   HttpCode,
   ForbiddenException,
+  UploadedFile,
+  Res,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -22,7 +25,11 @@ import {
   ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
+import { Response } from 'express';
 import { UsersService } from './users.service';
+import { UpdateAvatarDto } from './dtos/update-avatar.dto';
 import { CreateUserDto } from './dtos/create-user.dto';
 import { UpdateUserDto } from './dtos/update-user.dto';
 import { ManageUserDto } from './dtos/manage-user.dto';
@@ -162,5 +169,62 @@ export class UsersController {
   @ApiResponse({ status: 404, description: 'User not found' })
   async giveFirstChips(@Param('userId', new ParseUUIDPipe()) userId: string) {
     return this.usersService.giveFirstChips(userId);
+  }
+
+  @Put('user/:userId/avatar')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @UseInterceptors(FileInterceptor('avatar', { storage: memoryStorage() }))
+  @ApiOperation({ summary: 'Update user avatar image (multipart) and avatar JSON data' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Avatar updated successfully' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Cannot update another user profile' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async updateAvatar(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @UploadedFile() file: Express.Multer.File,
+    @Body('avatarData') avatarDataRaw: string,
+    @CurrentUser() user: any,
+  ) {
+    if (user.id !== userId && user.role !== Role.ADMIN) {
+      throw new ForbiddenException('Cannot update another user profile');
+    }
+
+    let avatarData: any = undefined;
+    if (avatarDataRaw) {
+      try {
+        avatarData = JSON.parse(avatarDataRaw);
+      } catch (e) {
+        // ignore parse error, let service validate
+      }
+    }
+
+    return this.usersService.updateAvatarWithFile(userId, file, avatarData);
+  }
+
+  @Get('user/:userId/avatar-data')
+  @ApiOperation({ summary: 'Get user avatar JSON data' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Avatar JSON retrieved' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async getAvatarData(@Param('userId', new ParseUUIDPipe()) userId: string) {
+    return this.usersService.getAvatarData(userId);
+  }
+
+  @Get('user/:userId/avatar-image')
+  @ApiOperation({ summary: 'Get user avatar image bytes' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Avatar image retrieved' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async getAvatarImage(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Res() res: Response,
+  ) {
+    const result = await this.usersService.getAvatarBinary(userId);
+    if (!result || !result.buffer) {
+      throw new ForbiddenException('User or avatar not found');
+    }
+    res.setHeader('Content-Type', result.mime || 'application/octet-stream');
+    return res.send(result.buffer);
   }
 }

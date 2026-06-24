@@ -1,6 +1,7 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
 import { CreateUserDto } from './dtos/create-user.dto';
 import { UpdateUserDto } from './dtos/update-user.dto';
+import { UpdateAvatarDto } from './dtos/update-avatar.dto';
 import { ManageUserDto } from './dtos/manage-user.dto';
 import { AdminUserDto } from './dtos/admin-user.dto';
 import { UsersRepository } from './repositories/users.repository';
@@ -190,5 +191,41 @@ export class UsersService {
 
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;
+  }
+
+
+  async updateAvatarWithFile(userId: string, file: Express.Multer.File, avatarData?: any): Promise<Partial<User>> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
+    const buffer = file && file.buffer ? file.buffer : undefined;
+    const mime = file && file.mimetype ? file.mimetype : undefined;
+
+    const updatedUser = await this.usersRepository.updateAvatar(userId, buffer, mime, avatarData);
+    if (!updatedUser) {
+      throw new NotFoundException('User not found');
+    }
+    const { password, ...userWithoutPassword } = updatedUser;
+    return userWithoutPassword;
+  }
+
+  async getAvatarData(userId: string): Promise<any> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    return user.avatarData || {};
+  }
+
+  
+
+  async getAvatarBinary(userId: string): Promise<{ buffer?: Buffer; mime?: string } | null> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    return { buffer: user.avatarBin, mime: user.avatarMime };
   }
 }
