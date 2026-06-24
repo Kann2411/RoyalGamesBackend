@@ -27,8 +27,14 @@ export class User {
   @Column({ type: 'varchar' })
   password: string;
 
-  @Column({ type: 'varchar', nullable: true })
-  avatar: string;
+  @Column({ name: 'avatar_bin', type: 'bytea', nullable: true })
+  avatarBin: Buffer;
+
+  @Column({ name: 'avatar_mime', type: 'varchar', nullable: true })
+  avatarMime: string;
+
+  @Column({ type: 'jsonb', nullable: true })
+  avatarData: any;
 
   @Column({ type: 'varchar', nullable: true })
   image: string;
