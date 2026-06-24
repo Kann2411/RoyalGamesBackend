@@ -1,7 +1,7 @@
 import { Module } from '@nestjs/common';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { typeormConfig } from './config/typeorm.config';
+import typeOrmConfig from './config/typeorm.config';
 import { AuthModule } from './modules/auth/auth.module';
 import { UsersModule } from './modules/users/users.module';
 import { GamesModule } from './modules/games/games.module';
@@ -16,8 +16,18 @@ import { AppService } from './app.service';
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
+      load: [typeOrmConfig],
     }),
-    TypeOrmModule.forRoot(typeormConfig()),
+    TypeOrmModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => {
+        const typeormConfig = configService.get('typeorm');
+        if (!typeormConfig) {
+          throw new Error('TypeORM configuration is not defined');
+        }
+        return typeormConfig;
+      },
+    }),
     AuthModule,
     UsersModule,
     GamesModule,

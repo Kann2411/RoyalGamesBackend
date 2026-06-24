@@ -149,7 +149,7 @@ export class PaymentsService {
             excluded_payment_types: [
               { id: 'digital_currency' },
               { id: 'digital_wallet' },
-            ],
+            ], 
             installments: 1,
           },
           // Solo incluir back_urls si tenemos URLs válidas

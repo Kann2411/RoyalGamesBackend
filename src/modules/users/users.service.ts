@@ -13,7 +13,7 @@ import { Role } from '../../common/enums/role.enum';
 export class UsersService {
   constructor(private usersRepository: UsersRepository) {}
 
-  async createUser(createUserDto: CreateUserDto): Promise<Partial<User>> {
+  async createUser(createUserDto: CreateUserDto): Promise<Partial<User> & { firstChipsReceived: boolean }> {
     const emailLowerCase = createUserDto.email.toLowerCase();
     const existingEmail = await this.usersRepository.findByEmail(
       emailLowerCase,
@@ -33,20 +33,26 @@ export class UsersService {
       createUserDto.password,
     );
 
-    // Contar usuarios existentes para determinar si debe recibir chips iniciales
-    const allUsers = await this.usersRepository.findAll();
-    const initialChips = allUsers.length < 100 ? 1000000 : 0;
-
+    // Create user without initial chips
     const user = await this.usersRepository.create({
       ...createUserDto,
       email: emailLowerCase,
       password: hashedPassword,
-      chips: initialChips,
+      chips: 0,
       firstChips: false,
     });
 
-    const { password, ...userWithoutPassword } = user;
-    return userWithoutPassword;
+    // Grant first chips atomically (only for first 100 users)
+    const updatedUser = await this.usersRepository.giveFirstChipsAtomic(user.id, 1000000);
+    const firstChipsReceived = updatedUser !== null;
+
+    // Fetch updated user with chips
+    const userToReturn = updatedUser || await this.usersRepository.findById(user.id);
+    if (!userToReturn) {
+      throw new NotFoundException('User not found');
+    }
+    const { password, ...userWithoutPassword } = userToReturn;
+    return { ...userWithoutPassword, firstChipsReceived };
   }
 
   async updateUser(id: string, updateUserDto: UpdateUserDto): Promise<Partial<User>> {
