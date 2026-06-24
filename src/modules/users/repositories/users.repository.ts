@@ -40,6 +40,15 @@ export class UsersRepository {
     return this.findById(id);
   }
 
+  async updateAvatar(id: string, buffer?: Buffer, mime?: string, avatarData?: any): Promise<User | null> {
+    const user = await this.findById(id);
+    if (!user) return null;
+    if (buffer !== undefined) user.avatarBin = buffer;
+    if (mime !== undefined) user.avatarMime = mime;
+    if (avatarData !== undefined) user.avatarData = avatarData;
+    return this.repository.save(user);
+  }
+
   async delete(id: string): Promise<void> {
     await this.repository.delete(id);
   }
