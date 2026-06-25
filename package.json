@@ -22,7 +22,8 @@
     "typeorm": "typeorm",
     "typeorm:migration:generate": "typeorm migration:generate -d dist/config/typeorm.config.js",
     "typeorm:migration:run": "typeorm migration:run -d dist/config/typeorm.config.js",
-    "typeorm:migration:revert": "typeorm migration:revert -d dist/config/typeorm.config.js"
+    "typeorm:migration:revert": "typeorm migration:revert -d dist/config/typeorm.config.js",
+    "reset-db": "node scripts/reset_db.js"
   },
   "dependencies": {
     "@nestjs-modules/mailer": "^1.9.1",
