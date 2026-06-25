@@ -1,4 +1,4 @@
-import { IsEmail, IsString, MinLength, IsOptional, IsInt } from 'class-validator';
+import { IsEmail, IsString, MinLength, IsOptional, IsInt, IsObject } from 'class-validator';
 import { ApiProperty } from '@nestjs/swagger';
 import { PartialType } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
@@ -40,4 +40,9 @@ export class UpdateUserDto extends PartialType(CreateUserDto) {
   @IsOptional()
   @IsString()
   image?: string;
+
+  @ApiProperty({ example: { theme: 'dark' }, description: 'Avatar JSON data', required: false })
+  @IsOptional()
+  @IsObject()
+  avatarData?: any;
 }
