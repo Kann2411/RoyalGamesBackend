@@ -7,6 +7,7 @@ import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import morgan from 'morgan';
 import cors from 'cors';
 import MercadoPagoConfig from 'mercadopago';
+import { DataSource } from 'typeorm';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
@@ -24,6 +25,24 @@ async function bootstrap() {
 
   validateEnv();
   const app = await NestFactory.create(AppModule);
+
+  const dataSource = app.get(DataSource);
+  if (!dataSource.isInitialized) {
+    await dataSource.initialize();
+  }
+
+  try {
+    await dataSource.runMigrations();
+    console.log('Database migrations applied successfully');
+  } catch (migrationError) {
+    console.warn('Migrations failed, attempting schema sync:', migrationError);
+    try {
+      await dataSource.synchronize();
+      console.log('Database schema synchronized successfully');
+    } catch (syncError) {
+      console.error('Failed to synchronize database schema:', syncError);
+    }
+  }
 
   // MercadoPago Configuration
   const mercadoPagoClient = new MercadoPagoConfig({
