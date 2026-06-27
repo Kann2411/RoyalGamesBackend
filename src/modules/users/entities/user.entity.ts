@@ -51,8 +51,7 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   sexo: string;
 
-  @Column({ type: 'varchar', nullable: true })
-  phone: string;
+  
 
   @Column({ type: 'bigint', default: 0 })
   chips: number;
