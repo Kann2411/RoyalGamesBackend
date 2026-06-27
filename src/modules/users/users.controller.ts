@@ -183,21 +183,34 @@ export class UsersController {
   async updateAvatar(
     @Param('userId', new ParseUUIDPipe()) userId: string,
     @UploadedFile() file: Express.Multer.File,
-    @Body('avatarData') avatarDataRaw: string,
+    @Body() body: any,
     @CurrentUser() user: any,
   ) {
     if (user.id !== userId && user.role !== Role.ADMIN) {
       throw new ForbiddenException('Cannot update another user profile');
     }
 
+    const avatarDataRaw = body?.avatarData;
     let avatarData: any = undefined;
-    if (avatarDataRaw) {
-      try {
-        avatarData = JSON.parse(avatarDataRaw);
-      } catch (e) {
-        // ignore parse error, let service validate
+
+    if (avatarDataRaw !== undefined) {
+      if (typeof avatarDataRaw === 'string') {
+        try {
+          avatarData = JSON.parse(avatarDataRaw);
+        } catch (e) {
+          console.warn('Could not parse avatarData JSON string:', avatarDataRaw);
+          avatarData = avatarDataRaw;
+        }
+      } else {
+        avatarData = avatarDataRaw;
       }
     }
+
+    console.log('updateAvatar request', {
+      userId,
+      file: file ? { originalname: file.originalname, mimetype: file.mimetype, size: file.size } : null,
+      avatarData,
+    });
 
     return this.usersService.updateAvatarWithFile(userId, file, avatarData);
   }

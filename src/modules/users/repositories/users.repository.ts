@@ -46,6 +46,7 @@ export class UsersRepository {
     if (buffer !== undefined) user.avatarBin = buffer;
     if (mime !== undefined) user.avatarMime = mime;
     if (avatarData !== undefined) user.avatarData = avatarData;
+    console.log('Repository updateAvatar', { id, hasBuffer: !!buffer, mime, hasAvatarData: avatarData !== undefined });
     return this.repository.save(user);
   }
 

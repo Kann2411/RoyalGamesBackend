@@ -209,10 +209,18 @@ export class UsersService {
     const buffer = file && file.buffer ? file.buffer : undefined;
     const mime = file && file.mimetype ? file.mimetype : undefined;
 
+    console.log('Saving avatar for user', {
+      userId,
+      hasFile: !!file,
+      fileInfo: file ? { originalname: file.originalname, mimetype: file.mimetype, size: file.size } : null,
+      avatarData,
+    });
+
     const updatedUser = await this.usersRepository.updateAvatar(userId, buffer, mime, avatarData);
     if (!updatedUser) {
       throw new NotFoundException('User not found');
     }
+
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;
   }
