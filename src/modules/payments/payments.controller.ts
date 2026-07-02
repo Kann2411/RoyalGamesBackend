@@ -10,7 +10,6 @@ import {
   ParseUUIDPipe,
   Res,
   UseGuards,
-  Redirect,
 } from '@nestjs/common';
 import { Response } from 'express';
 import {
@@ -20,7 +19,13 @@ import {
   ApiParam,
 } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
-import { CreateOrderDto, CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
+import {
+  CreateOrderDto,
+  CreateMercadoPagoOrderDto,
+  CreateMpPreferenceDto,
+  CreatePayPalOrderDto,
+  CapturePayPalOrderDto,
+} from './dtos/create-payment.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 
 @ApiTags('Payments')
@@ -77,28 +82,81 @@ export class PaymentsController {
     return { status: 'received' };
   }
 
-  @Get('mepago/success')
-  @ApiOperation({ summary: 'MercadoPago success redirect' })
-  @Redirect('http://localhost:3000/payment/success', 301)
-  async mercadoPagoSuccess(@Query() query: any) {
-    // MercadoPago redirects here after approved payment
-    return { url: 'http://localhost:3000/payment/success' };
+  @Get('mercadopago/success')
+  @ApiOperation({ summary: 'MercadoPago success redirect → frontend' })
+  async mercadoPagoSuccess(@Query() query: any, @Res() res: Response) {
+    // MercadoPago redirige aquí tras pago aprobado.
+    // Reenviamos al frontend con los query params originales para que pueda
+    // mostrar el estado del pago al usuario.
+    const frontendUrl =
+      process.env.FRONTEND_URL || 'http://localhost:3000';
+    const { id, userId } = query;
+    const redirectTo = id || userId
+      ? `${frontendUrl}/mercadopago/success?id=${id ?? ''}&userId=${userId ?? ''}`
+      : `${frontendUrl}/mercadopago/success`;
+    return res.redirect(301, redirectTo);
   }
 
-  @Get('mepago/failure')
-  @ApiOperation({ summary: 'MercadoPago failure redirect' })
-  @Redirect('http://localhost:3000/payment/failure', 301)
-  async mercadoPagoFailure(@Query() query: any) {
-    // MercadoPago redirects here after failed payment
-    return { url: 'http://localhost:3000/payment/failure' };
+  @Get('mercadopago/failure')
+  @ApiOperation({ summary: 'MercadoPago failure redirect → frontend' })
+  async mercadoPagoFailure(@Query() query: any, @Res() res: Response) {
+    const frontendUrl =
+      process.env.FRONTEND_URL || 'http://localhost:3000';
+    const { id, userId } = query;
+    const redirectTo = id || userId
+      ? `${frontendUrl}/mercadopago/failure?id=${id ?? ''}&userId=${userId ?? ''}`
+      : `${frontendUrl}/mercadopago/failure`;
+    return res.redirect(301, redirectTo);
   }
 
-  @Get('mepago/pending')
-  @ApiOperation({ summary: 'MercadoPago pending redirect' })
-  @Redirect('http://localhost:3000/payment/pending', 301)
-  async mercadoPagoPending(@Query() query: any) {
-    // MercadoPago redirects here for pending payments
-    return { url: 'http://localhost:3000/payment/pending' };
+  @Get('mercadopago/pending')
+  @ApiOperation({ summary: 'MercadoPago pending redirect → frontend' })
+  async mercadoPagoPending(@Query() query: any, @Res() res: Response) {
+    const frontendUrl =
+      process.env.FRONTEND_URL || 'http://localhost:3000';
+    const { id, userId } = query;
+    const redirectTo = id || userId
+      ? `${frontendUrl}/mercadopago/pending?id=${id ?? ''}&userId=${userId ?? ''}`
+      : `${frontendUrl}/mercadopago/pending`;
+    return res.redirect(301, redirectTo);
+  }
+
+  // ─── Nuevos endpoints estilo El_Gaalpon_de_Jose ───────────────────────────
+
+  @Post('mercadopago/create_preference')
+  @HttpCode(HttpStatus.CREATED)
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Create MercadoPago preference (El_Gaalpon style)',
+    description:
+      'Acepta title, quantity, unit_price, currency_id, userId y chips opcional. ' +
+      'Retorna { preferenceId, initPoint, redirectUrl }.',
+  })
+  @ApiResponse({ status: 201, description: 'Preference created successfully' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  @ApiResponse({ status: 400, description: 'Invalid request or unsupported currency' })
+  async createMpPreference(@Body() dto: CreateMpPreferenceDto) {
+    return this.paymentsService.createMpPreference(dto);
+  }
+
+  @Post('mercadopago/payment')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'MercadoPago alternative webhook (El_Gaalpon style)',
+    description:
+      'MercadoPago llama a esta ruta con ?id=&userId=&pagoId= tras completar un pago. ' +
+      'Delega el procesamiento al webhook principal.',
+  })
+  async handleMercadoPagoPayment(
+    @Query('id') id?: string,
+    @Query('userId') userId?: string,
+    @Query('pagoId') pagoId?: string,
+  ) {
+    return this.paymentsService.handleMercadoPagoPaymentWebhook(
+      id ?? '',
+      userId ?? '',
+      pagoId ?? '',
+    );
   }
 
   // ============= PAYPAL =============
