@@ -54,14 +54,4 @@ export class AuthService {
   async validateUser(id: string): Promise<User | null> {
     return this.usersRepository.findOne({ where: { id } });
   }
-
-  async validateToken(token: string): Promise<any> {
-    try {
-      return this.jwtService.verify(token, {
-        secret: process.env.JWT_SECRET || 'royal-secret-key',
-      });
-    } catch (error) {
-      throw new UnauthorizedException('Invalid or expired token');
-    }
-  }
 }

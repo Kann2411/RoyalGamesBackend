@@ -14,10 +14,8 @@ import {
   HttpStatus,
   HttpCode,
   ForbiddenException,
-  UnauthorizedException,
   UploadedFile,
   Res,
-  Req,
 } from '@nestjs/common';
 import {
   ApiTags,
@@ -29,8 +27,7 @@ import {
 } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
-import { Response, Request } from 'express';
-import { AuthService } from '../auth/auth.service';
+import { Response } from 'express';
 import { UsersService } from './users.service';
 import { UpdateAvatarDto } from './dtos/update-avatar.dto';
 import { CreateUserDto } from './dtos/create-user.dto';
@@ -46,10 +43,7 @@ import { Role } from '../../common/enums/role.enum';
 @ApiTags('Users')
 @Controller()
 export class UsersController {
-  constructor(
-    private usersService: UsersService,
-    private authService: AuthService,
-  ) {}
+  constructor(private usersService: UsersService) {}
 
   @Post('signup')
   @HttpCode(HttpStatus.CREATED)
@@ -178,36 +172,21 @@ export class UsersController {
   }
 
   @Put('user/:userId/avatar')
+  @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @UseInterceptors(FileInterceptor('avatar', { storage: memoryStorage() }))
   @ApiOperation({ summary: 'Update user avatar image (multipart) and avatar JSON data' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'Avatar updated successfully' })
-  @ApiResponse({ status: 401, description: 'Unauthorized - Invalid or missing token' })
   @ApiResponse({ status: 403, description: 'Forbidden - Cannot update another user profile' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async updateAvatar(
     @Param('userId', new ParseUUIDPipe()) userId: string,
     @UploadedFile() file: Express.Multer.File,
     @Body() body: any,
-    @Req() req: Request,
+    @CurrentUser() user: any,
   ) {
-    const tokenFromHeader = req.headers?.authorization?.toString()?.replace(/^Bearer\s+/i, '').trim();
-    const token =
-      tokenFromHeader ||
-      body?.token ||
-      req.query?.token ||
-      req.headers?.['x-access-token'];
-
-    if (!token || typeof token !== 'string') {
-      throw new UnauthorizedException('Authentication token not provided');
-    }
-
-    const payload = await this.authService.validateToken(token);
-    const userIdFromToken = payload?.sub;
-    const userRoleFromToken = payload?.role;
-
-    if (userIdFromToken !== userId && userRoleFromToken !== Role.ADMIN) {
+    if (user.id !== userId && user.role !== Role.ADMIN) {
       throw new ForbiddenException('Cannot update another user profile');
     }
 
@@ -231,7 +210,6 @@ export class UsersController {
       userId,
       file: file ? { originalname: file.originalname, mimetype: file.mimetype, size: file.size } : null,
       avatarData,
-      authSource: tokenFromHeader ? 'header' : body?.token ? 'body' : req.query?.token ? 'query' : 'x-access-token',
     });
 
     return this.usersService.updateAvatarWithFile(userId, file, avatarData);
