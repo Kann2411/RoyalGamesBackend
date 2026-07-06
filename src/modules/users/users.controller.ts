@@ -172,8 +172,6 @@ export class UsersController {
   }
 
   @Put('user/:userId/avatar')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth()
   @UseInterceptors(FileInterceptor('avatar', { storage: memoryStorage() }))
   @ApiOperation({ summary: 'Update user avatar image (multipart) and avatar JSON data' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
@@ -184,12 +182,7 @@ export class UsersController {
     @Param('userId', new ParseUUIDPipe()) userId: string,
     @UploadedFile() file: Express.Multer.File,
     @Body() body: any,
-    @CurrentUser() user: any,
   ) {
-    if (user.id !== userId && user.role !== Role.ADMIN) {
-      throw new ForbiddenException('Cannot update another user profile');
-    }
-
     const avatarDataRaw = body?.avatarData;
     let avatarData: any = undefined;
 
