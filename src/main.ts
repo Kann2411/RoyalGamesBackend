@@ -63,7 +63,8 @@ async function bootstrap() {
         'https://aws.amazon.com',
         'https://royaljoker1.s3.us-east-2.amazonaws.com',
         'https://royalgames.lat',
-        'https://minasroyal.s3.us-east-2.amazonaws.com'
+        'https://minasroyal.s3.us-east-2.amazonaws.com',
+        'https://baazaar.s3.us-east-2.amazonaws.com'
       ],
       credentials: true,
     }),

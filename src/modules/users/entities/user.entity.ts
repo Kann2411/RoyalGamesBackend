@@ -24,7 +24,7 @@ export class User {
   @Column({ type: 'varchar', length: 50, unique: true })
   email: string;
 
-  @Column({ type: 'varchar' })
+  @Column({ type: 'varchar', nullable: true })
   password: string;
 
   @Column({ name: 'avatar_bin', type: 'bytea', nullable: true })
@@ -35,6 +35,9 @@ export class User {
 
   @Column({ type: 'jsonb', nullable: true })
   avatarData: any;
+
+  @Column({ type: 'varchar', nullable: true })
+  googleId: string;
 
   @Column({ type: 'varchar', nullable: true })
   image: string;
