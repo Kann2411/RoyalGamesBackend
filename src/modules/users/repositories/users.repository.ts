@@ -83,6 +83,16 @@ export class UsersRepository {
        RETURNING *`,
       [amount, userId],
     );
-    return result && result[0] ? (result[0] as User) : null;
+    
+    let row: any = null;
+    if (Array.isArray(result)) {
+      if (Array.isArray(result[0]) && result[0].length > 0) {
+        row = result[0][0];
+      } else if (result.length > 0 && typeof result[0] === 'object' && !Array.isArray(result[0]) && Object.keys(result[0]).length > 0) {
+        row = result[0];
+      }
+    }
+    return (row && row.id) ? (row as User) : null;
   }
+
 }
