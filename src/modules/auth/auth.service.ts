@@ -65,6 +65,7 @@ export class AuthService {
   async loginWithGoogle(idToken: string) {
     // 1. Verificar el id_token con Google
     let payload: any;
+    let firstChipsReceived = false;
     try {
       const ticket = await this.googleClient.verifyIdToken({
         idToken,
@@ -123,6 +124,32 @@ export class AuthService {
       });
 
       user = await this.usersRepository.save(user);
+
+      // Otorgar fichas iniciales atómicamente (solo a los primeros 100 usuarios)
+      const updated = await this.usersRepository.query(
+        `UPDATE users SET chips = chips + $1, "firstChips" = true
+         WHERE id = $2
+         AND ("firstChips" = false OR "firstChips" IS NULL)
+         AND (SELECT COUNT(*) FROM users WHERE "firstChips" = true) < 100
+         RETURNING *`,
+        [1000000, user.id],
+      );
+
+      let updatedUserRow: any = null;
+      if (Array.isArray(updated)) {
+        if (Array.isArray(updated[0]) && updated[0].length > 0) {
+          updatedUserRow = updated[0][0];
+        } else if (updated.length > 0 && typeof updated[0] === 'object' && !Array.isArray(updated[0]) && Object.keys(updated[0]).length > 0) {
+          updatedUserRow = updated[0];
+        }
+      }
+
+      if (updatedUserRow && updatedUserRow.id) {
+        user = updatedUserRow as User;
+        firstChipsReceived = true;
+      }
+
+
     }
 
     // 4. Generar JWT propio de Royal Games
@@ -135,6 +162,7 @@ export class AuthService {
 
     return {
       access_token: this.jwtService.sign(jwtPayload),
+      firstChipsReceived,
       user: {
         id: user.id,
         email: user.email,
