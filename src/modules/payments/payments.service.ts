@@ -1,13 +1,20 @@
-import { Injectable, Logger, BadRequestException, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException, NotFoundException } from '@nestjs/common';
 import axios from 'axios';
 import * as paypalCheckoutServerSdk from '@paypal/checkout-server-sdk';
-import MercadoPagoConfig, { Preference } from 'mercadopago';
+import MercadoPagoConfig from 'mercadopago';
 import { Repository, DataSource } from 'typeorm';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { User } from '../users/entities/user.entity';
 import { Pay } from './entities/pay.entity';
-import { CreateOrderDto, CreateMercadoPagoOrderDto, CreatePayPalOrderDto, CapturePayPalOrderDto } from './dtos/create-payment.dto';
+import {
+  CreateOrderDto,
+  CreateMercadoPagoOrderDto,
+  CreateMpPreferenceDto,
+  CreatePayPalOrderDto,
+  CapturePayPalOrderDto,
+} from './dtos/create-payment.dto';
 import { PaymentsRepository } from './repositories/payments.repository';
+import { MercadoPagoRepository } from './repositories/mercadopago.repository';
 import { PaymentStatus } from './enums/payment-status.enum';
 
 @Injectable()
@@ -39,6 +46,7 @@ export class PaymentsService {
 
   constructor(
     private paymentsRepository: PaymentsRepository,
+    private mercadoPagoRepository: MercadoPagoRepository,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
     @InjectRepository(Pay)
@@ -89,112 +97,123 @@ export class PaymentsService {
   }
 
   // ============= MERCADOPAGO =============
+
+  /**
+   * Ruta: POST /mepago/create-order
+   * Recibe CreateMercadoPagoOrderDto (userId, chips, price, currency).
+   * Delega la llamada a la API de MP en MercadoPagoRepository y graba el
+   * registro pendiente en BD. Retorna { orderId, initPoint }.
+   */
   async createMercadoPagoOrder(
     createMercadoPagoOrderDto: CreateMercadoPagoOrderDto,
   ): Promise<any> {
-    try {
-      const user = await this.usersRepository.findOne({
-        where: { id: createMercadoPagoOrderDto.userId },
-      });
+    const user = await this.usersRepository.findOne({
+      where: { id: createMercadoPagoOrderDto.userId },
+    });
+    if (!user) throw new NotFoundException('User not found');
 
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
+    const isProduction = process.env.NODE_ENV === 'production';
 
-      const client = new MercadoPagoConfig({
-        accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
-      });
-      const preferenceClient = new Preference(client);
+    const preference = await this.mercadoPagoRepository.createPreference({
+      itemId: `${createMercadoPagoOrderDto.userId}-${Date.now()}`,
+      title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
+      unitPrice: parseFloat(createMercadoPagoOrderDto.price),
+      quantity: 1,
+      currencyId: createMercadoPagoOrderDto.currency,
+      userId: createMercadoPagoOrderDto.userId,
+      chips: createMercadoPagoOrderDto.chips,
+    });
 
-      const mepagoSuccessUrl = process.env.MERCADOPAGO_SUCCESS_URL;
-      const mepagoFailureUrl = process.env.MERCADOPAGO_FAILURE_URL;
-      const mepagoPendingUrl = process.env.MERCADOPAGO_PENDING_URL;
-      
-      // Verificar si tenemos URLs válidas (no localhost/127.0.0.1)
-      const hasValidBackUrls = mepagoSuccessUrl && 
-        !mepagoSuccessUrl.includes('localhost') && 
-        !mepagoSuccessUrl.includes('127.0.0.1');
-      
-      const isProduction = process.env.NODE_ENV === 'production';
-      const isDevelopment = process.env.NODE_ENV !== 'production';
+    // Crear registro de pago PENDIENTE con preferenceId
+    const pagoDb = this.payRepository.create({
+      userId: createMercadoPagoOrderDto.userId,
+      chips: createMercadoPagoOrderDto.chips,
+      price: createMercadoPagoOrderDto.price,
+      paymentPlatform: 'mepago',
+      mercadoPagoPreferenceId: preference.preferenceId,
+      status: PaymentStatus.PENDING,
+      date: new Date().toISOString(),
+    });
+    await this.paymentsRepository.create(pagoDb);
 
-      const currencyId = (createMercadoPagoOrderDto.currency).toUpperCase();
-      const supportedCurrencies = ['COP', 'MXN', 'USD', 'ARS', 'BRL', 'EUR'];
-      if (!supportedCurrencies.includes(currencyId)) {
-        throw new BadRequestException(`Unsupported MercadoPago currency: ${currencyId}`);
-      }
+    return {
+      orderId: preference.preferenceId,
+      initPoint: isProduction
+        ? preference.initPoint
+        : preference.sandboxInitPoint,
+    };
+  }
 
-      // En desarrollo, log las URLs para debugging
-      if (isDevelopment) {
-        this.logger.debug(`MercadoPago URLs - Success: ${mepagoSuccessUrl}, Notification: ${process.env.MERCADOPAGO_NOTIFICATION_URL}`);
-        this.logger.warn('⚠️ Running in DEVELOPMENT: Use NGROK for back_urls and webhook. Run: ngrok http 3001');
-      }
+  /**
+   * Ruta: POST /mercadopago/create_preference
+   * Estilo El_Gaalpon_de_Jose: recibe el body tal como lo envía el frontend
+   * de referencia (title, quantity, unit_price, currency_id, userId, chips?).
+   * Retorna { preferenceId, initPoint, redirectUrl } para máxima compatibilidad.
+   */
+  async createMpPreference(dto: CreateMpPreferenceDto): Promise<any> {
+    const user = await this.usersRepository.findOne({
+      where: { id: dto.userId },
+    });
+    if (!user) throw new NotFoundException('User not found');
 
-      const response = await preferenceClient.create({
-        body: {
-          items: [
-            {
-              id: `${createMercadoPagoOrderDto.userId}-${Date.now()}`,
-              title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
-              unit_price: parseFloat(createMercadoPagoOrderDto.price),
-              quantity: 1,
-              currency_id: currencyId,
-            },
-          ],
-          payer: {
-            name: user.nick || 'Player',
-            email: user.email,
-          },
-          payment_methods: {
-            excluded_payment_types: [
-              { id: 'digital_currency' },
-              { id: 'digital_wallet' },
-            ], 
-            installments: 1,
-          },
-          // Solo incluir back_urls si tenemos URLs válidas
-          ...(hasValidBackUrls ? {
-            back_urls: {
-              success: mepagoSuccessUrl,
-              failure: mepagoFailureUrl,
-              pending: mepagoPendingUrl,
-            },
-            auto_return: 'approved',
-          } : {}),
-          external_reference: createMercadoPagoOrderDto.userId,
-          ...(process.env.MERCADOPAGO_NOTIFICATION_URL ? {
-            notification_url: process.env.MERCADOPAGO_NOTIFICATION_URL,
-          } : {}),
-          metadata: {
-            chips: createMercadoPagoOrderDto.chips,
-          },
-        },
-      });
+    const isProduction = process.env.NODE_ENV === 'production';
+    const chips = dto.chips ?? 0;
 
-      // Crear registro de pago PENDIENTE con preferenceId
-      const pagoDb = this.payRepository.create({
-        userId: createMercadoPagoOrderDto.userId,
-        chips: createMercadoPagoOrderDto.chips,
-        price: createMercadoPagoOrderDto.price,
-        paymentPlatform: 'mepago',
-        mercadoPagoPreferenceId: response.id,
-        status: PaymentStatus.PENDING,
-        date: new Date().toISOString(),
-      });
-      await this.paymentsRepository.create(pagoDb);
+    const preference = await this.mercadoPagoRepository.createPreference({
+      itemId: `${dto.userId}-${Date.now()}`,
+      title: dto.title,
+      unitPrice: dto.unit_price,
+      quantity: dto.quantity,
+      currencyId: dto.currency_id,
+      userId: dto.userId,
+      chips,
+    });
 
-      return {
-        orderId: response.id,
-        initPoint: isProduction
-          ? response.init_point
-          : response.sandbox_init_point,
-      };
-    } catch (error: any) {
-      const errorMessage =
-        error?.response?.body?.message || error?.message || 'Unknown MercadoPago error';
-      this.logger.error('MercadoPago Order Creation Error:', errorMessage, error);
-      throw new BadRequestException('Failed to create MercadoPago order');
+    // Registrar pago pendiente en BD
+    const pagoDb = this.payRepository.create({
+      userId: dto.userId,
+      chips,
+      price: String(dto.unit_price * dto.quantity),
+      paymentPlatform: 'mepago',
+      mercadoPagoPreferenceId: preference.preferenceId,
+      status: PaymentStatus.PENDING,
+      date: new Date().toISOString(),
+    });
+    await this.paymentsRepository.create(pagoDb);
+
+    const initPoint = isProduction
+      ? preference.initPoint
+      : preference.sandboxInitPoint;
+
+    return {
+      preferenceId: preference.preferenceId,
+      initPoint,
+      // redirectUrl para compatibilidad con PlansView.tsx de referencia
+      redirectUrl: initPoint,
+    };
+  }
+
+  /**
+   * Ruta: POST /mercadopago/payment (webhook alternativo estilo El_Gaalpon)
+   * MercadoPago llama a esta ruta con ?id=&userId=&pagoId= al completarse un pago.
+   * Delega el procesamiento al webhook principal existente.
+   */
+  async handleMercadoPagoPaymentWebhook(
+    id: string,
+    userId: string,
+    pagoId: string,
+  ): Promise<any> {
+    this.logger.debug(
+      `MP payment webhook (alt): id=${id} userId=${userId} pagoId=${pagoId}`,
+    );
+    // Reutilizar la lógica del webhook principal pasando el id como data.data.id
+    if (id) {
+      await this.handleMercadoPagoWebhook(
+        { type: 'payment', data: { id } },
+        {},
+      );
     }
+    return { status: 'received' };
   }
 
   async handleMercadoPagoWebhook(data: any, queryParams?: any): Promise<void> {

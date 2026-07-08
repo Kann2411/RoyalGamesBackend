@@ -88,3 +88,44 @@ export class CapturePayPalOrderDto {
   @IsString()
   price: string;
 }
+
+/**
+ * DTO para POST /mercadopago/create_preference
+ * Estilo El_Gaalpon_de_Jose — acepta los mismos campos que el frontend
+ * de referencia, más `chips` (necesario para acreditar en RoyalBack).
+ */
+export class CreateMpPreferenceDto {
+  @ApiProperty({
+    example: '123e4567-e89b-12d3-a456-426614174000',
+    description: 'User ID (UUID)',
+  })
+  @IsUUID()
+  userId: string;
+
+  @ApiProperty({ example: 'Royal Games - 100 Chips', description: 'Item title shown in MercadoPago' })
+  @IsString()
+  title: string;
+
+  @ApiProperty({ example: 1, description: 'Quantity of items' })
+  @IsNumber()
+  @Min(1)
+  quantity: number;
+
+  @ApiProperty({ example: 10.0, description: 'Unit price in the specified currency' })
+  @IsNumber()
+  unit_price: number;
+
+  @ApiProperty({ example: 'COP', description: 'ISO 4217 currency code (COP, ARS, MXN, etc.)' })
+  @IsString()
+  currency_id: string;
+
+  @ApiProperty({
+    example: 100,
+    description: 'Chips to credit on approved payment (optional; defaults to 0)',
+    required: false,
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  chips?: number;
+}
