@@ -1,0 +1,90 @@
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { BingoService } from './bingo.service';
+import { CreatePlayerDto } from './dtos/create-player.dto';
+import { CreateRoomDto } from './dtos/create-room.dto';
+import { CreateGameDto } from './dtos/create-game.dto';
+
+@Controller('bingo')
+export class BingoController {
+  constructor(private readonly bingoService: BingoService) {}
+
+  @Post('players')
+  createPlayer(@Body() dto: CreatePlayerDto) {
+    return this.bingoService.createPlayer(dto);
+  }
+
+  @Get('players/:id')
+  getPlayer(@Param('id') id: string) {
+    return this.bingoService.getPlayer(id);
+  }
+
+  @Patch('players/:id')
+  updatePlayer(@Param('id') id: string, @Body() body: Record<string, any>) {
+    return this.bingoService.updatePlayer(id, body);
+  }
+
+  @Get('rooms')
+  getRooms() {
+    return this.bingoService.getRooms();
+  }
+
+  @Post('rooms')
+  createRoom(@Body() dto: CreateRoomDto) {
+    return this.bingoService.createRoom(dto);
+  }
+
+  @Get('rooms/:id')
+  getRoom(@Param('id') id: string) {
+    return this.bingoService.getRoom(id);
+  }
+
+  @Post('rooms/:id/games')
+  createGame(@Param('id') roomId: string, @Body() dto: CreateGameDto) {
+    return this.bingoService.createGame({ ...dto, roomId });
+  }
+
+  @Get('games/:id')
+  getGame(@Param('id') id: string) {
+    return this.bingoService.getGame(id);
+  }
+
+  @Post('games/:id/join')
+  joinGame(@Param('id') gameId: string, @Query('playerId') playerId: string) {
+    return this.bingoService.joinGame(gameId, playerId);
+  }
+
+  @Post('games/:id/start')
+  startGame(@Param('id') gameId: string) {
+    return this.bingoService.startGame(gameId);
+  }
+
+  @Post('games/:id/draw')
+  drawNumber(@Param('id') gameId: string) {
+    return this.bingoService.drawNumber(gameId);
+  }
+
+  @Post('games/:id/claim')
+  claimWin(@Param('id') gameId: string, @Body() body: { cardId: string; claimType: string }) {
+    return this.bingoService.claimWin(gameId, body.cardId, body.claimType);
+  }
+
+  @Get('games/:id/state')
+  getGameState(@Param('id') id: string) {
+    return this.bingoService.getGameState(id);
+  }
+
+  @Get('games/:id/history')
+  getGameHistory(@Param('id') id: string) {
+    return this.bingoService.getGameHistory(id);
+  }
+
+  @Post('superbingo/topup')
+  topupSuperbingo(@Body() body: { amount: number }) {
+    return this.bingoService.topupSuperbingo(body.amount);
+  }
+
+  @Get('superbingo')
+  getSuperbingo() {
+    return this.bingoService.getSuperbingo();
+  }
+}

@@ -8,6 +8,7 @@ import { GamesModule } from './modules/games/games.module';
 import { PaymentsModule } from './modules/payments/payments.module';
 import { ChipsModule } from './modules/chips/chips.module';
 import { MailingModule } from './modules/mailing/mailing.module';
+import { BingoModule } from './modules/bingo/bingo.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -34,6 +35,7 @@ import { AppService } from './app.service';
     PaymentsModule,
     ChipsModule,
     MailingModule,
+    BingoModule,
   ],
   controllers: [AppController],
   providers: [AppService],
