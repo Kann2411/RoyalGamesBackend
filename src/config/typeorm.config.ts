@@ -13,7 +13,7 @@ const config = {
   password: process.env.DB_PASSWORD,
   autoLoadEntities: true,
   dropSchema: false,
-  synchronize: true,
+  synchronize: false,
   logging: process.env.NODE_ENV === 'development',
   ssl:
     (process.env.DB_SSL || 'false').toLowerCase() === 'true'
