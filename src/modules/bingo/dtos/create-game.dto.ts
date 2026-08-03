@@ -1,8 +1,9 @@
 import { IsUUID, IsOptional, IsObject } from 'class-validator';
 
 export class CreateGameDto {
+  @IsOptional()
   @IsUUID()
-  roomId: string;
+  roomId?: string;
 
   @IsOptional()
   @IsObject()
