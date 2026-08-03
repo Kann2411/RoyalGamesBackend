@@ -20,6 +20,7 @@ import { CreatePlayerDto } from './dtos/create-player.dto';
 import { CreateRoomDto } from './dtos/create-room.dto';
 import { CreateGameDto } from './dtos/create-game.dto';
 import { CreateCardDto } from './dtos/create-card.dto';
+import { UpdateCardMarksDto } from './dtos/update-card-marks.dto';
 
 @Injectable()
 export class BingoService implements OnModuleInit {
