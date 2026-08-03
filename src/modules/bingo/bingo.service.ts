@@ -1,5 +1,6 @@
 import {
   Injectable,
+  OnModuleInit,
   NotFoundException,
   BadRequestException,
   ConflictException,
@@ -20,7 +21,7 @@ import { CreateRoomDto } from './dtos/create-room.dto';
 import { CreateGameDto } from './dtos/create-game.dto';
 
 @Injectable()
-export class BingoService {
+export class BingoService implements OnModuleInit {
   constructor(
     @InjectRepository(BingoPlayer)
     private readonly playerRepository: Repository<BingoPlayer>,
@@ -78,7 +79,16 @@ export class BingoService {
     return this.roomRepository.find({ where: { isActive: true } });
   }
 
+  async onModuleInit(): Promise<void> {
+    await this.ensureDefaultRooms();
+  }
+
   async createRoom(dto: CreateRoomDto): Promise<BingoRoom> {
+    const existing = await this.roomRepository.findOne({ where: { name: dto.name } });
+    if (existing) {
+      throw new ConflictException('Room already exists');
+    }
+
     const room = this.roomRepository.create({
       name: dto.name,
       type: dto.type ?? BingoRoomType.PUBLIC,
@@ -89,6 +99,39 @@ export class BingoService {
     });
 
     return this.roomRepository.save(room);
+  }
+
+  async ensureDefaultRooms(): Promise<BingoRoom[]> {
+    const defaultRooms = [
+      { name: 'Sala 250000', type: BingoRoomType.PUBLIC, betAmount: 250000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 250000 } },
+      { name: 'Sala 100000', type: BingoRoomType.PUBLIC, betAmount: 100000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 100000 } },
+      { name: 'Sala 50000', type: BingoRoomType.PUBLIC, betAmount: 50000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 50000 } },
+      { name: 'Sala 10000', type: BingoRoomType.PUBLIC, betAmount: 10000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 10000 } },
+      { name: 'Sala 5000', type: BingoRoomType.PUBLIC, betAmount: 5000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 5000 } },
+      { name: 'Sala 1000', type: BingoRoomType.PUBLIC, betAmount: 1000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 1000 } },
+      { name: 'Sala 100', type: BingoRoomType.PUBLIC, betAmount: 100, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 100 } },
+      { name: 'Sala 25', type: BingoRoomType.PUBLIC, betAmount: 25, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 25 } },
+      { name: 'Sala 10', type: BingoRoomType.PUBLIC, betAmount: 10, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 10 } },
+    ];
+
+    const created: BingoRoom[] = [];
+
+    for (const roomData of defaultRooms) {
+      const existing = await this.roomRepository.findOne({ where: { name: roomData.name } });
+      if (!existing) {
+        const room = this.roomRepository.create({
+          name: roomData.name,
+          type: roomData.type,
+          betAmount: roomData.betAmount,
+          maxPlayers: roomData.maxPlayers,
+          isActive: true,
+          config: roomData.config,
+        });
+        created.push(await this.roomRepository.save(room));
+      }
+    }
+
+    return created;
   }
 
   async getRoom(id: string): Promise<BingoRoom> {

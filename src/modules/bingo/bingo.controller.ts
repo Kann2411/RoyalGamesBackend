@@ -24,7 +24,8 @@ export class BingoController {
   }
 
   @Get('rooms')
-  getRooms() {
+  async getRooms() {
+    await this.bingoService.ensureDefaultRooms();
     return this.bingoService.getRooms();
   }
 
