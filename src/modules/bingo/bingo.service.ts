@@ -142,7 +142,7 @@ export class BingoService implements OnModuleInit {
     return room;
   }
 
-  async createGame(dto: CreateGameDto): Promise<BingoGame> {
+  async createGame(dto: CreateGameDto & { roomId: string }): Promise<BingoGame> {
     const room = await this.getRoom(dto.roomId);
 
     const game = this.gameRepository.create({
