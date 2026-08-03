@@ -19,6 +19,7 @@ import { BingoAudit } from './entities/bingo-audit.entity';
 import { CreatePlayerDto } from './dtos/create-player.dto';
 import { CreateRoomDto } from './dtos/create-room.dto';
 import { CreateGameDto } from './dtos/create-game.dto';
+import { CreateCardDto } from './dtos/create-card.dto';
 
 @Injectable()
 export class BingoService implements OnModuleInit {
@@ -253,6 +254,59 @@ export class BingoService implements OnModuleInit {
     });
 
     return this.winnerRepository.save(winner);
+  }
+
+  async getPlayerGameInfo(gameId: string, playerId: string): Promise<Record<string, any>> {
+    const game = await this.getGame(gameId);
+    const ticket = await this.ticketRepository.findOne({ where: { gameId, playerId } });
+    const cards = await this.cardRepository.find({ where: { gameId, ownerId: playerId } });
+
+    return {
+      game,
+      ticket,
+      cards,
+      rounds: await this.roundRepository.find({ where: { gameId } }),
+      winners: await this.winnerRepository.find({ where: { gameId } }),
+    };
+  }
+
+  async purchaseCard(gameId: string, playerId: string, dto: CreateCardDto): Promise<BingoCard> {
+    const game = await this.getGame(gameId);
+    const player = await this.getPlayer(playerId);
+
+    if (game.state !== BingoGameState.WAITING) {
+      throw new BadRequestException('Cannot purchase card after game has started');
+    }
+
+    const existingTicket = await this.ticketRepository.findOne({ where: { gameId, playerId } });
+    if (!existingTicket) {
+      throw new NotFoundException('Player has not joined the game');
+    }
+
+    const card = this.cardRepository.create({
+      gameId: game.id,
+      ownerId: player.id,
+      numbers: dto.numbers ?? Array.from({ length: 24 }, (_, index) => index + 1),
+      marks: {},
+      isWinning: false,
+      claimedLines: [],
+    });
+
+    const savedCard = await this.cardRepository.save(card);
+    existingTicket.cardIds = [...existingTicket.cardIds, savedCard.id];
+    await this.ticketRepository.save(existingTicket);
+
+    return savedCard;
+  }
+
+  async updateCardMarks(gameId: string, cardId: string, dto: UpdateCardMarksDto): Promise<BingoCard> {
+    const card = await this.cardRepository.findOne({ where: { id: cardId, gameId } });
+    if (!card) {
+      throw new NotFoundException('Card not found');
+    }
+
+    card.marks = dto.marks;
+    return this.cardRepository.save(card);
   }
 
   async getGameState(gameId: string): Promise<Record<string, any>> {

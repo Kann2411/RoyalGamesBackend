@@ -3,6 +3,8 @@ import { BingoService } from './bingo.service';
 import { CreatePlayerDto } from './dtos/create-player.dto';
 import { CreateRoomDto } from './dtos/create-room.dto';
 import { CreateGameDto } from './dtos/create-game.dto';
+import { CreateCardDto } from './dtos/create-card.dto';
+import { UpdateCardMarksDto } from './dtos/update-card-marks.dto';
 
 @Controller('bingo')
 export class BingoController {
@@ -47,6 +49,29 @@ export class BingoController {
   @Get('games/:id')
   getGame(@Param('id') id: string) {
     return this.bingoService.getGame(id);
+  }
+
+  @Get('games/:id/player/:playerId')
+  getPlayerGameInfo(@Param('id') gameId: string, @Param('playerId') playerId: string) {
+    return this.bingoService.getPlayerGameInfo(gameId, playerId);
+  }
+
+  @Post('games/:id/player/:playerId/card')
+  purchaseCard(
+    @Param('id') gameId: string,
+    @Param('playerId') playerId: string,
+    @Body() dto: CreateCardDto,
+  ) {
+    return this.bingoService.purchaseCard(gameId, playerId, dto);
+  }
+
+  @Patch('games/:id/cards/:cardId/marks')
+  updateCardMarks(
+    @Param('id') gameId: string,
+    @Param('cardId') cardId: string,
+    @Body() dto: UpdateCardMarksDto,
+  ) {
+    return this.bingoService.updateCardMarks(gameId, cardId, dto);
   }
 
   @Post('games/:id/join')
