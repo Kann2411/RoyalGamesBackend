@@ -147,6 +147,16 @@ export class BingoService implements OnModuleInit {
   async createGame(dto: CreateGameDto & { roomId: string }): Promise<BingoGame> {
     const room = await this.getRoom(dto.roomId);
 
+    // Reuse an existing waiting or running game for the room if present
+    const existing = await this.gameRepository.findOne({ where: { roomId: room.id, state: BingoGameState.WAITING } });
+    if (existing) {
+      return existing;
+    }
+    const running = await this.gameRepository.findOne({ where: { roomId: room.id, state: BingoGameState.RUNNING } });
+    if (running) {
+      return running;
+    }
+
     const game = this.gameRepository.create({
       roomId: room.id,
       state: BingoGameState.WAITING,
@@ -155,7 +165,10 @@ export class BingoService implements OnModuleInit {
       persistedSnapshot: { state: BingoGameState.WAITING },
     });
 
-    return this.gameRepository.save(game);
+    const saved = await this.gameRepository.save(game);
+    // Reserve or create a superbingo pool for this room and attach to game
+    await this.reservePoolForGame(saved.id, room.id).catch(() => undefined);
+    return this.getGame(saved.id);
   }
 
   async getGame(id: string): Promise<BingoGame> {
@@ -172,6 +185,13 @@ export class BingoService implements OnModuleInit {
 
     if (game.state !== BingoGameState.WAITING) {
       throw new BadRequestException('Game is not accepting new players');
+    }
+
+    // If player already has a ticket for this game, return it instead of creating a duplicate
+    const existingTicket = await this.ticketRepository.findOne({ where: { gameId: game.id, playerId: player.id } });
+    if (existingTicket) {
+      const existingCards = await this.cardRepository.find({ where: { gameId: game.id, ownerId: player.id } });
+      return { ticket: existingTicket, cards: existingCards };
     }
 
     const ticket = this.ticketRepository.create({
@@ -200,6 +220,27 @@ export class BingoService implements OnModuleInit {
     await this.ticketRepository.save(savedTicket);
 
     return { ticket: savedTicket, cards: savedCards };
+  }
+
+  async getPlayerByUsername(username: string): Promise<BingoPlayer> {
+    const player = await this.playerRepository.findOne({ where: { username } });
+    if (!player) {
+      throw new NotFoundException('Player not found');
+    }
+    return player;
+  }
+
+  async getRoomCurrentGame(roomId: string): Promise<BingoGame> {
+    const game = await this.gameRepository.findOne({
+      where: [
+        { roomId, state: BingoGameState.WAITING },
+        { roomId, state: BingoGameState.RUNNING },
+      ],
+    });
+    if (!game) {
+      throw new NotFoundException('No current game for room');
+    }
+    return game;
   }
 
   async startGame(gameId: string): Promise<BingoGame> {
@@ -349,12 +390,69 @@ export class BingoService implements OnModuleInit {
     return this.superbingoPoolRepository.find();
   }
 
-  async topupSuperbingo(amount: number): Promise<BingoSuperBingoPool> {
+  async getSuperbingoForRoom(roomId: string): Promise<BingoSuperBingoPool> {
+    const pool = await this.superbingoPoolRepository.findOne({ where: { roomId }, order: { updatedAt: 'DESC' } });
+    if (!pool) {
+      throw new NotFoundException('Superbingo pool not found for room');
+    }
+    return pool;
+  }
+
+  async getOrCreateSuperbingoForRoom(roomId: string): Promise<BingoSuperBingoPool> {
+    let pool = await this.superbingoPoolRepository.findOne({ where: { roomId }, order: { updatedAt: 'DESC' } });
+    if (!pool) {
+      pool = this.superbingoPoolRepository.create({ roomId, amount: 0, lastUpdatedAt: new Date() });
+      pool = await this.superbingoPoolRepository.save(pool);
+    }
+    return pool;
+  }
+
+  async topupSuperbingo(amount: number, roomId?: string): Promise<BingoSuperBingoPool> {
+    if (roomId) {
+      const pool = await this.getOrCreateSuperbingoForRoom(roomId);
+      pool.amount = Number(pool.amount) + Number(amount);
+      pool.lastUpdatedAt = new Date();
+      return this.superbingoPoolRepository.save(pool);
+    }
+
     const pool = this.superbingoPoolRepository.create({
       amount,
       lastUpdatedAt: new Date(),
     });
     return this.superbingoPoolRepository.save(pool);
+  }
+
+  async reservePoolForGame(gameId: string, roomId: string): Promise<BingoSuperBingoPool> {
+    const pool = await this.getOrCreateSuperbingoForRoom(roomId);
+    pool.reservedForGameId = gameId;
+    pool.lastUpdatedAt = new Date();
+    const saved = await this.superbingoPoolRepository.save(pool);
+    // attach to game
+    const game = await this.getGame(gameId);
+    game.superbingoPoolId = saved.id;
+    await this.gameRepository.save(game);
+    return saved;
+  }
+
+  async finalizeGameSuperbingo(gameId: string, claimedBeforeSuperball: boolean): Promise<void> {
+    // If superbingo was not claimed before the super ball, increase pool; otherwise reset pool
+    const game = await this.getGame(gameId);
+    if (!game.superbingoPoolId) return;
+    const pool = await this.superbingoPoolRepository.findOne({ where: { id: game.superbingoPoolId } });
+    if (!pool) return;
+    if (claimedBeforeSuperball) {
+      // reset pool
+      pool.amount = 0;
+      pool.reservedForGameId = null;
+      pool.lastUpdatedAt = new Date();
+      await this.superbingoPoolRepository.save(pool);
+    } else {
+      // increase pool by some rule, e.g., add fixed increment or based on bets; here add 10% of total bets placeholder
+      // For now, just update timestamp and keep amount
+      pool.reservedForGameId = null;
+      pool.lastUpdatedAt = new Date();
+      await this.superbingoPoolRepository.save(pool);
+    }
   }
 
   async createAudit(entityType: string, entityId: string, action: string, payload: Record<string, any>, performedBy?: string): Promise<BingoAudit> {

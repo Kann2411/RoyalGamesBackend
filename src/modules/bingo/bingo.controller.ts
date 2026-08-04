@@ -41,6 +41,12 @@ export class BingoController {
     return this.bingoService.getRoom(id);
   }
 
+  @Get('rooms/:id/current-game')
+  getRoomCurrentGame(@Param('id') id: string) {
+    // returns the current waiting or running game for the room
+    return this.bingoService.getRoomCurrentGame(id);
+  }
+
   @Post('rooms/:id/games')
   createGame(@Param('id') roomId: string, @Body() dto: CreateGameDto) {
     return this.bingoService.createGame({ ...dto, roomId });
@@ -51,9 +57,19 @@ export class BingoController {
     return this.bingoService.getGame(id);
   }
 
+  @Get('games/:id/state')
+  getGameState(@Param('id') id: string) {
+    return this.bingoService.getGameState(id);
+  }
+
   @Get('games/:id/player/:playerId')
   getPlayerGameInfo(@Param('id') gameId: string, @Param('playerId') playerId: string) {
     return this.bingoService.getPlayerGameInfo(gameId, playerId);
+  }
+
+  @Get('players/username/:username')
+  getPlayerByUsername(@Param('username') username: string) {
+    return this.bingoService.getPlayerByUsername(username);
   }
 
   @Post('games/:id/player/:playerId/card')
@@ -105,12 +121,17 @@ export class BingoController {
   }
 
   @Post('superbingo/topup')
-  topupSuperbingo(@Body() body: { amount: number }) {
-    return this.bingoService.topupSuperbingo(body.amount);
+  topupSuperbingo(@Body() body: { amount: number; roomId?: string }) {
+    return this.bingoService.topupSuperbingo(body.amount, body.roomId);
   }
 
   @Get('superbingo')
   getSuperbingo() {
     return this.bingoService.getSuperbingo();
+  }
+
+  @Get('superbingo/room/:roomId')
+  getSuperbingoForRoom(@Param('roomId') roomId: string) {
+    return this.bingoService.getSuperbingoForRoom(roomId);
   }
 }
