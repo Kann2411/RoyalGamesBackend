@@ -27,7 +27,7 @@ export class BingoSuperBingoPool {
   lastUpdatedAt: Date;
 
   @Column({ type: 'uuid', nullable: true })
-  reservedForGameId: string;
+  reservedForGameId: string | null;
 
   @ManyToOne(() => BingoGame, { nullable: true })
   @JoinColumn({ name: 'reservedForGameId' })

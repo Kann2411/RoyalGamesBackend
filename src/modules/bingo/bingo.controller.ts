@@ -110,11 +110,6 @@ export class BingoController {
     return this.bingoService.claimWin(gameId, body.cardId, body.claimType);
   }
 
-  @Get('games/:id/state')
-  getGameState(@Param('id') id: string) {
-    return this.bingoService.getGameState(id);
-  }
-
   @Get('games/:id/history')
   getGameHistory(@Param('id') id: string) {
     return this.bingoService.getGameHistory(id);
