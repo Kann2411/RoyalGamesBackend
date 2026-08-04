@@ -271,7 +271,7 @@ export class BingoService implements OnModuleInit {
     };
   }
 
-  async purchaseCard(gameId: string, playerId: string, dto: CreateCardDto): Promise<BingoCard> {
+  async purchaseCard(gameId: string, playerId: string, dto: CreateCardDto): Promise<{ ticket: BingoTicket; cards: BingoCard[] }> {
     const game = await this.getGame(gameId);
     const player = await this.getPlayer(playerId);
 
@@ -284,20 +284,42 @@ export class BingoService implements OnModuleInit {
       throw new NotFoundException('Player has not joined the game');
     }
 
-    const card = this.cardRepository.create({
-      gameId: game.id,
-      ownerId: player.id,
-      numbers: dto.numbers ?? Array.from({ length: 24 }, (_, index) => index + 1),
-      marks: {},
-      isWinning: false,
-      claimedLines: [],
-    });
+    const quantity = dto.quantity ?? 1;
+    const existingCount = (existingTicket.cardIds || []).length;
+    if (existingCount + quantity > 24) {
+      throw new BadRequestException('Maximum 24 cards per player per game');
+    }
 
-    const savedCard = await this.cardRepository.save(card);
-    existingTicket.cardIds = [...existingTicket.cardIds, savedCard.id];
+    const toCreate: BingoCard[] = [];
+    for (let i = 0; i < quantity; i++) {
+      const numbers = dto.numbers ?? this.generateCardNumbers();
+      const card = this.cardRepository.create({
+        gameId: game.id,
+        ownerId: player.id,
+        numbers,
+        marks: {},
+        isWinning: false,
+        claimedLines: [],
+      });
+      toCreate.push(card);
+    }
+
+    const savedCards = await this.cardRepository.save(toCreate);
+    existingTicket.cardIds = [...(existingTicket.cardIds || []), ...savedCards.map((c) => c.id)];
     await this.ticketRepository.save(existingTicket);
 
-    return savedCard;
+    return { ticket: existingTicket, cards: savedCards };
+  }
+
+  private generateCardNumbers(count = 15): number[] {
+    const pool = Array.from({ length: 90 }, (_, i) => i + 1);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    return pool.slice(0, count).sort((a, b) => a - b);
   }
 
   async updateCardMarks(gameId: string, cardId: string, dto: UpdateCardMarksDto): Promise<BingoCard> {

@@ -1,4 +1,4 @@
-import { IsUUID, IsOptional, IsArray } from 'class-validator';
+import { IsUUID, IsOptional, IsArray, IsInt, Min, Max } from 'class-validator';
 
 export class CreateCardDto {
   @IsUUID()
@@ -7,4 +7,10 @@ export class CreateCardDto {
   @IsOptional()
   @IsArray()
   numbers?: number[];
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(24)
+  quantity?: number;
 }
