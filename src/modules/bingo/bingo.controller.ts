@@ -58,8 +58,8 @@ export class BingoController {
   }
 
   @Get('games/:id/state')
-  getGameState(@Param('id') id: string) {
-    return this.bingoService.getGameState(id);
+  getGameState(@Param('id') id: string, @Query('playerId') playerId?: string) {
+    return this.bingoService.getGameState(id, playerId);
   }
 
   @Get('games/:id/player/:playerId')

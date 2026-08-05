@@ -157,12 +157,13 @@ export class BingoService implements OnModuleInit {
       return running;
     }
 
+    const superbingoThreshold = this.getSuperbingoThreshold();
     const game = this.gameRepository.create({
       roomId: room.id,
       state: BingoGameState.WAITING,
       currentRound: 0,
-      resultSummary: {},
-      persistedSnapshot: { state: BingoGameState.WAITING },
+      resultSummary: { line: 0, doubleLine: 0, bingo: 0, superbingo: 0 },
+      persistedSnapshot: { state: BingoGameState.WAITING, superbingoThreshold, latestDraw: null },
     });
 
     const saved = await this.gameRepository.save(game);
@@ -234,7 +235,11 @@ export class BingoService implements OnModuleInit {
 
     game.state = BingoGameState.RUNNING;
     game.startAt = new Date();
-    game.persistedSnapshot = { state: BingoGameState.RUNNING };
+    game.persistedSnapshot = {
+      ...game.persistedSnapshot,
+      state: BingoGameState.RUNNING,
+      latestDraw: null,
+    };
     return this.gameRepository.save(game);
   }
 
@@ -244,8 +249,15 @@ export class BingoService implements OnModuleInit {
       throw new BadRequestException('Game is not running');
     }
 
+    const existingRounds = await this.roundRepository.find({ where: { gameId: game.id }, order: { roundNumber: 'ASC' } });
+    const drawnNumbers = existingRounds.map((round) => round.drawnNumber);
+    const remainingNumbers = Array.from({ length: 90 }, (_, index) => index + 1).filter((n) => !drawnNumbers.includes(n));
+    if (remainingNumbers.length === 0) {
+      throw new BadRequestException('All bingo numbers have already been drawn');
+    }
+
     const roundNumber = game.currentRound + 1;
-    const drawnNumber = Math.floor(Math.random() * 75) + 1;
+    const drawnNumber = remainingNumbers[Math.floor(Math.random() * remainingNumbers.length)];
 
     const round = this.roundRepository.create({
       gameId: game.id,
@@ -254,11 +266,16 @@ export class BingoService implements OnModuleInit {
     });
 
     const savedRound = await this.roundRepository.save(round);
+    const updatedDrawnNumbers = [...drawnNumbers, drawnNumber];
 
     game.currentRound = roundNumber;
-    game.persistedSnapshot = { state: BingoGameState.RUNNING, latestDraw: drawnNumber };
-    await this.gameRepository.save(game);
+    game.persistedSnapshot = {
+      ...game.persistedSnapshot,
+      state: BingoGameState.RUNNING,
+      latestDraw: drawnNumber,
+    };
 
+    await this.evaluateGameAfterDraw(game, updatedDrawnNumbers);
     return savedRound;
   }
 
@@ -355,6 +372,160 @@ export class BingoService implements OnModuleInit {
     return pool.slice(0, count).sort((a, b) => a - b);
   }
 
+  private getSuperbingoThreshold(): number {
+    return Math.floor(Math.random() * 21) + 50;
+  }
+
+  private calculatePrizeAmounts(totalCards: number): { line: number; doubleLine: number; bingo: number } {
+    return {
+      line: Math.max(100, totalCards * 10),
+      doubleLine: Math.max(200, totalCards * 20),
+      bingo: Math.max(500, totalCards * 50),
+    };
+  }
+
+  private async evaluateGameAfterDraw(game: BingoGame, drawnNumbers: number[]): Promise<void> {
+    const drawnSet = new Set(drawnNumbers);
+    const cards = await this.cardRepository.find({ where: { gameId: game.id } });
+    const existingWinners = await this.winnerRepository.find({ where: { gameId: game.id } });
+    const existingWinMap = new Map<string, Set<BingoWinType>>();
+
+    for (const winner of existingWinners) {
+      if (!winner.cardId) continue;
+      if (!existingWinMap.has(winner.cardId)) {
+        existingWinMap.set(winner.cardId, new Set());
+      }
+      const existingCardWins = existingWinMap.get(winner.cardId);
+      existingCardWins?.add(winner.winType);
+    }
+
+    const totalCards = cards.length;
+    const prizeAmounts = this.calculatePrizeAmounts(totalCards);
+    const pool = game.superbingoPoolId
+      ? await this.superbingoPoolRepository.findOne({ where: { id: game.superbingoPoolId } })
+      : null;
+    const superbingoThreshold = game.persistedSnapshot?.superbingoThreshold ?? this.getSuperbingoThreshold();
+    let superbingoAwarded = false;
+    const newWinners: BingoWinner[] = [];
+    const cardsToSave: BingoCard[] = [];
+    let bingoFoundThisRound = false;
+
+    for (const card of cards) {
+      const rows = [
+        card.numbers.slice(0, 5),
+        card.numbers.slice(5, 10),
+        card.numbers.slice(10, 15),
+      ];
+      const completedRows = rows.map((row) => row.every((value) => drawnSet.has(value)));
+      const completedCount = completedRows.filter(Boolean).length;
+      const claimedLines = completedRows
+        .map((completed, index) => (completed ? index.toString() : null))
+        .filter((value): value is string => value !== null);
+
+      const existingWins = existingWinMap.get(card.id) ?? new Set();
+      let cardUpdated = false;
+
+      if (completedRows.some((row) => row) && !existingWins.has(BingoWinType.LINE)) {
+        const winner = this.winnerRepository.create({
+          gameId: game.id,
+          playerId: card.ownerId,
+          cardId: card.id,
+          prizeAmount: prizeAmounts.line,
+          winType: BingoWinType.LINE,
+        });
+        newWinners.push(winner);
+        cardUpdated = true;
+      }
+
+      if (completedCount >= 2 && !existingWins.has(BingoWinType.DOUBLE_LINE)) {
+        const winner = this.winnerRepository.create({
+          gameId: game.id,
+          playerId: card.ownerId,
+          cardId: card.id,
+          prizeAmount: prizeAmounts.doubleLine,
+          winType: BingoWinType.DOUBLE_LINE,
+        });
+        newWinners.push(winner);
+        cardUpdated = true;
+      }
+
+      if (completedCount === 3 && !existingWins.has(BingoWinType.BINGO)) {
+        const winner = this.winnerRepository.create({
+          gameId: game.id,
+          playerId: card.ownerId,
+          cardId: card.id,
+          prizeAmount: prizeAmounts.bingo,
+          winType: BingoWinType.BINGO,
+        });
+        newWinners.push(winner);
+        bingoFoundThisRound = true;
+        cardUpdated = true;
+
+        if (pool && game.currentRound <= superbingoThreshold && !existingWins.has(BingoWinType.SUPERBINGO)) {
+          const superbingoWinner = this.winnerRepository.create({
+            gameId: game.id,
+            playerId: card.ownerId,
+            cardId: card.id,
+            prizeAmount: Number(pool.amount),
+            winType: BingoWinType.SUPERBINGO,
+          });
+          newWinners.push(superbingoWinner);
+          superbingoAwarded = true;
+          cardUpdated = true;
+        }
+      }
+
+      if (cardUpdated || card.claimedLines.length !== claimedLines.length || card.claimedLines.some((line, idx) => line !== claimedLines[idx])) {
+        card.claimedLines = claimedLines;
+        card.isWinning = card.isWinning || claimedLines.length > 0;
+        cardsToSave.push(card);
+      }
+    }
+
+    if (cardsToSave.length > 0) {
+      await this.cardRepository.save(cardsToSave);
+    }
+
+    if (newWinners.length > 0) {
+      await this.winnerRepository.save(newWinners);
+    }
+
+    if (pool) {
+      if (superbingoAwarded) {
+        pool.amount = 0;
+        pool.reservedForGameId = null;
+        pool.lastUpdatedAt = new Date();
+      } else {
+        pool.amount = Number(pool.amount) + Math.max(50, totalCards * 5);
+        pool.lastUpdatedAt = new Date();
+        if (!pool.reservedForGameId) {
+          pool.reservedForGameId = game.id;
+        }
+      }
+      await this.superbingoPoolRepository.save(pool);
+    }
+
+    game.resultSummary = {
+      ...game.resultSummary,
+      line: prizeAmounts.line,
+      doubleLine: prizeAmounts.doubleLine,
+      bingo: prizeAmounts.bingo,
+      superbingo: pool ? Number(pool.amount) : 0,
+    };
+
+    if (bingoFoundThisRound) {
+      game.state = BingoGameState.FINISHED;
+      game.endAt = new Date();
+      game.persistedSnapshot = {
+        ...game.persistedSnapshot,
+        state: BingoGameState.FINISHED,
+        latestDraw: drawnNumbers[drawnNumbers.length - 1],
+      };
+    }
+
+    await this.gameRepository.save(game);
+  }
+
   private generateUniqueCardNumbers(existingCardKeys: Set<string>, count = 15): number[] {
     let numbers: number[];
     let key: string;
@@ -401,12 +572,43 @@ export class BingoService implements OnModuleInit {
     return this.cardRepository.save(card);
   }
 
-  async getGameState(gameId: string): Promise<Record<string, any>> {
+  async getGameState(gameId: string, playerId?: string): Promise<Record<string, any>> {
     const game = await this.getGame(gameId);
+    const rounds = await this.roundRepository.find({ where: { gameId }, order: { roundNumber: 'ASC' } });
+    const winners = await this.winnerRepository.find({ where: { gameId } });
+
+    let ticket = null;
+    let cards: BingoCard[] = [];
+    if (playerId) {
+      ticket = await this.ticketRepository.findOne({ where: { gameId, playerId } });
+      cards = await this.cardRepository.find({ where: { gameId, ownerId: playerId } });
+    }
+
     return {
-      game,
-      rounds: await this.roundRepository.find({ where: { gameId } }),
-      winners: await this.winnerRepository.find({ where: { gameId } }),
+      game: {
+        id: game.id,
+        state: game.state,
+        currentRound: game.currentRound,
+        rounds: rounds.map((round) => ({ roundNumber: round.roundNumber, number: round.drawnNumber, drawnAt: round.drawnAt })),
+        superbingoPoolId: game.superbingoPoolId,
+        resultSummary: game.resultSummary,
+        persistedSnapshot: game.persistedSnapshot,
+      },
+      ticket: ticket ? { playerId: ticket.playerId, cardIds: ticket.cardIds } : null,
+      cards: cards.map((card) => ({
+        id: card.id,
+        numbers: card.numbers,
+        marks: card.marks,
+        claimedLines: card.claimedLines,
+        isWinning: card.isWinning,
+      })),
+      winners: winners.map((winner) => ({
+        id: winner.id,
+        playerId: winner.playerId,
+        cardId: winner.cardId,
+        prizeAmount: winner.prizeAmount,
+        winType: winner.winType,
+      })),
     };
   }
 

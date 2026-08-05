@@ -13,6 +13,7 @@ import { BingoCard } from './bingo-card.entity';
 
 export enum BingoWinType {
   LINE = 'linea',
+  DOUBLE_LINE = 'doubleLine',
   BINGO = 'bingo',
   SUPERBINGO = 'superbingo',
 }

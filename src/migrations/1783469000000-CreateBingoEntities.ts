@@ -8,7 +8,7 @@ export class CreateBingoEntities1783469000000 implements MigrationInterface {
       CREATE TYPE bingo_player_status AS ENUM ('online', 'offline', 'banned');
       CREATE TYPE bingo_room_type AS ENUM ('public', 'private');
       CREATE TYPE bingo_game_state AS ENUM ('waiting', 'running', 'finished', 'cancelled');
-      CREATE TYPE bingo_win_type AS ENUM ('linea', 'bingo', 'superbingo');
+      CREATE TYPE bingo_win_type AS ENUM ('linea', 'doubleLine', 'bingo', 'superbingo');
     `);
 
     await queryRunner.query(`
