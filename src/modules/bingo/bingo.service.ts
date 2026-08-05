@@ -202,24 +202,7 @@ export class BingoService implements OnModuleInit {
     });
 
     const savedTicket = await this.ticketRepository.save(ticket);
-
-    const generatedCards = Array.from({ length: 1 }, () => {
-      const numbers = Array.from({ length: 24 }, (_, index) => index + 1);
-      return this.cardRepository.create({
-        gameId: game.id,
-        ownerId: player.id,
-        numbers,
-        marks: {},
-        isWinning: false,
-        claimedLines: [],
-      });
-    });
-
-    const savedCards = await this.cardRepository.save(generatedCards);
-    savedTicket.cardIds = savedCards.map((card) => card.id);
-    await this.ticketRepository.save(savedTicket);
-
-    return { ticket: savedTicket, cards: savedCards };
+    return { ticket: savedTicket, cards: [] };
   }
 
   async getPlayerByUsername(username: string): Promise<BingoPlayer> {
@@ -331,9 +314,18 @@ export class BingoService implements OnModuleInit {
       throw new BadRequestException('Maximum 24 cards per player per game');
     }
 
+    const existingCards = await this.cardRepository.find({ where: { gameId: game.id, ownerId: player.id } });
+    const existingCardKeys = new Set(existingCards.map((card) => [...card.numbers].sort((a, b) => a - b).join(',')));
+
+    if (dto.numbers && quantity > 1) {
+      throw new BadRequestException('Cannot request multiple cards with custom numbers');
+    }
+
     const toCreate: BingoCard[] = [];
     for (let i = 0; i < quantity; i++) {
-      const numbers = dto.numbers ?? this.generateCardNumbers();
+      const numbers = dto.numbers
+        ? this.validateCustomCardNumbers(dto.numbers, existingCardKeys)
+        : this.generateUniqueCardNumbers(existingCardKeys);
       const card = this.cardRepository.create({
         gameId: game.id,
         ownerId: player.id,
@@ -361,6 +353,42 @@ export class BingoService implements OnModuleInit {
       pool[j] = tmp;
     }
     return pool.slice(0, count).sort((a, b) => a - b);
+  }
+
+  private generateUniqueCardNumbers(existingCardKeys: Set<string>, count = 15): number[] {
+    let numbers: number[];
+    let key: string;
+    do {
+      numbers = this.generateCardNumbers(count);
+      key = numbers.join(',');
+    } while (existingCardKeys.has(key));
+
+    existingCardKeys.add(key);
+    return numbers;
+  }
+
+  private validateCustomCardNumbers(numbers: number[], existingCardKeys: Set<string>): number[] {
+    if (numbers.length !== 15) {
+      throw new BadRequestException('Custom card must contain exactly 15 numbers');
+    }
+
+    const uniqueNumbers = new Set(numbers);
+    if (uniqueNumbers.size !== numbers.length) {
+      throw new BadRequestException('Custom card numbers must be unique');
+    }
+
+    if (numbers.some((n) => n < 1 || n > 90)) {
+      throw new BadRequestException('Custom card numbers must be between 1 and 90');
+    }
+
+    const sorted = [...numbers].sort((a, b) => a - b);
+    const key = sorted.join(',');
+    if (existingCardKeys.has(key)) {
+      throw new BadRequestException('Custom card numbers duplicate an existing card');
+    }
+
+    existingCardKeys.add(key);
+    return sorted;
   }
 
   async updateCardMarks(gameId: string, cardId: string, dto: UpdateCardMarksDto): Promise<BingoCard> {
