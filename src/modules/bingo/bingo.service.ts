@@ -24,6 +24,9 @@ import { UpdateCardMarksDto } from './dtos/update-card-marks.dto';
 
 @Injectable()
 export class BingoService implements OnModuleInit {
+  private bingoEngineInterval: NodeJS.Timeout;
+  private engineLock = false;
+
   constructor(
     @InjectRepository(BingoPlayer)
     private readonly playerRepository: Repository<BingoPlayer>,
@@ -83,6 +86,73 @@ export class BingoService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await this.ensureDefaultRooms();
+    this.startBingoEngine();
+  }
+
+  private startBingoEngine(): void {
+    if (this.bingoEngineInterval) {
+      return;
+    }
+
+    this.bingoEngineInterval = setInterval(() => {
+      this.runBingoEngine().catch(() => undefined);
+    }, 1000);
+
+    this.runBingoEngine().catch(() => undefined);
+  }
+
+  private async runBingoEngine(): Promise<void> {
+    if (this.engineLock) {
+      return;
+    }
+
+    this.engineLock = true;
+    try {
+      const rooms = await this.roomRepository.find({ where: { isActive: true } });
+      const now = new Date();
+
+      for (const room of rooms) {
+        const game = await this.gameRepository.findOne({
+          where: [
+            { roomId: room.id, state: BingoGameState.WAITING },
+            { roomId: room.id, state: BingoGameState.RUNNING },
+          ],
+          order: { createdAt: 'ASC' },
+        });
+
+        if (!game) {
+          await this.createGame({ roomId: room.id, config: {} });
+          continue;
+        }
+
+        if (game.state === BingoGameState.WAITING) {
+          const createdAt = new Date(game.createdAt).getTime();
+          if (now.getTime() - createdAt >= 10000) {
+            await this.startGame(game.id);
+          }
+          continue;
+        }
+
+        if (game.state === BingoGameState.RUNNING) {
+          const lastRound = await this.roundRepository.findOne({
+            where: { gameId: game.id },
+            order: { roundNumber: 'DESC' },
+          });
+
+          const lastDrawAt = lastRound?.drawnAt ?? game.startAt;
+          const lastTime = lastDrawAt ? new Date(lastDrawAt).getTime() : 0;
+          if (now.getTime() - lastTime >= 1000) {
+            try {
+              await this.drawNumber(game.id);
+            } catch {
+              // ignore draw errors until next tick
+            }
+          }
+        }
+      }
+    } finally {
+      this.engineLock = false;
+    }
   }
 
   async createRoom(dto: CreateRoomDto): Promise<BingoRoom> {
@@ -299,6 +369,7 @@ export class BingoService implements OnModuleInit {
   }
 
   async getPlayerGameInfo(gameId: string, playerId: string): Promise<Record<string, any>> {
+    await this.cleanupInvalidCards(gameId);
     const game = await this.getGame(gameId);
     const ticket = await this.ticketRepository.findOne({ where: { gameId, playerId } });
     const cards = await this.cardRepository.find({ where: { gameId, ownerId: playerId } });
@@ -370,6 +441,24 @@ export class BingoService implements OnModuleInit {
       pool[j] = tmp;
     }
     return pool.slice(0, count).sort((a, b) => a - b);
+  }
+
+  private async cleanupInvalidCards(gameId: string): Promise<void> {
+    const cards = await this.cardRepository.find({ where: { gameId } });
+    const invalidCardIds = cards
+      .filter((card) => !Array.isArray(card.numbers) || card.numbers.length !== 15 || card.numbers.some((n) => typeof n !== 'number' || n < 1 || n > 90))
+      .map((card) => card.id);
+
+    if (invalidCardIds.length === 0) {
+      return;
+    }
+
+    const tickets = await this.ticketRepository.find({ where: { gameId } });
+    for (const ticket of tickets) {
+      ticket.cardIds = (ticket.cardIds || []).filter((cardId) => !invalidCardIds.includes(cardId));
+    }
+    await this.ticketRepository.save(tickets);
+    await this.cardRepository.delete(invalidCardIds);
   }
 
   private getSuperbingoThreshold(): number {
@@ -573,6 +662,7 @@ export class BingoService implements OnModuleInit {
   }
 
   async getGameState(gameId: string, playerId?: string): Promise<Record<string, any>> {
+    await this.cleanupInvalidCards(gameId);
     const game = await this.getGame(gameId);
     const rounds = await this.roundRepository.find({ where: { gameId }, order: { roundNumber: 'ASC' } });
     const winners = await this.winnerRepository.find({ where: { gameId } });
@@ -584,15 +674,22 @@ export class BingoService implements OnModuleInit {
       cards = await this.cardRepository.find({ where: { gameId, ownerId: playerId } });
     }
 
+    const drawnNumbers = rounds.map((round) => round.drawnNumber);
+    const currentBall = drawnNumbers.length ? drawnNumbers[drawnNumbers.length - 1] : null;
+
     return {
       game: {
         id: game.id,
         state: game.state,
         currentRound: game.currentRound,
         rounds: rounds.map((round) => ({ roundNumber: round.roundNumber, number: round.drawnNumber, drawnAt: round.drawnAt })),
+        drawnNumbers,
+        currentBall,
         superbingoPoolId: game.superbingoPoolId,
         resultSummary: game.resultSummary,
         persistedSnapshot: game.persistedSnapshot,
+        superbingoThreshold: game.persistedSnapshot?.superbingoThreshold ?? null,
+        superbingoValue: game.resultSummary?.superbingo ?? null,
       },
       ticket: ticket ? { playerId: ticket.playerId, cardIds: ticket.cardIds } : null,
       cards: cards.map((card) => ({
