@@ -656,36 +656,46 @@ export class BingoService implements OnModuleInit {
       await this.winnerRepository.save(newWinners);
     }
 
-    if (pool) {
-      if (superbingoAwarded) {
-        pool.amount = 0;
-        pool.reservedForGameId = null;
-        pool.lastUpdatedAt = new Date();
-      } else {
-        pool.amount = Number(pool.amount) + Math.max(50, totalCards * 5);
-        pool.lastUpdatedAt = new Date();
-        if (!pool.reservedForGameId) {
-          pool.reservedForGameId = game.id;
-        }
-      }
-      await this.superbingoPoolRepository.save(pool);
-    }
-
-    game.resultSummary = {
-      ...game.resultSummary,
-      line: prizeAmounts.line,
-      doubleLine: prizeAmounts.doubleLine,
-      bingo: prizeAmounts.bingo,
-      superbingo: pool ? Number(pool.amount) : 0,
-    };
-
+    let awardedSuperbingoAmount = 0;
     if (bingoFoundThisRound) {
+      if (pool) {
+        if (superbingoAwarded) {
+          awardedSuperbingoAmount = Number(pool.amount);
+          pool.amount = 0;
+          pool.reservedForGameId = null;
+          pool.lastUpdatedAt = new Date();
+        } else {
+          pool.amount = Number(pool.amount) + Math.max(50, totalCards * 5);
+          pool.lastUpdatedAt = new Date();
+          if (!pool.reservedForGameId) {
+            pool.reservedForGameId = game.id;
+          }
+        }
+        await this.superbingoPoolRepository.save(pool);
+      }
+
+      game.resultSummary = {
+        ...game.resultSummary,
+        line: prizeAmounts.line,
+        doubleLine: prizeAmounts.doubleLine,
+        bingo: prizeAmounts.bingo,
+        superbingo: awardedSuperbingoAmount,
+      };
+
       game.state = BingoGameState.FINISHED;
       game.endAt = new Date();
       game.persistedSnapshot = {
         ...game.persistedSnapshot,
         state: BingoGameState.FINISHED,
         latestDraw: drawnNumbers[drawnNumbers.length - 1],
+      };
+    } else {
+      game.resultSummary = {
+        ...game.resultSummary,
+        line: prizeAmounts.line,
+        doubleLine: prizeAmounts.doubleLine,
+        bingo: prizeAmounts.bingo,
+        superbingo: 0,
       };
     }
 
@@ -849,6 +859,9 @@ export class BingoService implements OnModuleInit {
     const game = await this.getGame(gameId);
     const rounds = await this.roundRepository.find({ where: { gameId }, order: { roundNumber: 'ASC' } });
     const winners = await this.winnerRepository.find({ where: { gameId } });
+    const superbingoPool = game.superbingoPoolId
+      ? await this.superbingoPoolRepository.findOne({ where: { id: game.superbingoPoolId } })
+      : null;
 
     let ticket = null;
     let cards: BingoCard[] = [];
@@ -874,6 +887,7 @@ export class BingoService implements OnModuleInit {
         drawnNumbers,
         currentBall,
         superbingoPoolId: game.superbingoPoolId,
+        superbingoPoolAmount: superbingoPool ? Number(superbingoPool.amount) : 0,
         resultSummary,
         persistedSnapshot: game.persistedSnapshot,
         superbingoThreshold: game.persistedSnapshot?.superbingoThreshold ?? null,
