@@ -461,6 +461,45 @@ export class BingoService implements OnModuleInit {
     await this.cardRepository.delete(invalidCardIds);
   }
 
+  private getGameTiming(game: BingoGame, rounds: BingoRound[]): {
+    elapsedSeconds: number;
+    secondsToNextDraw: number;
+    nextDrawAt: Date | null;
+    superbingoCountdown: number | null;
+    waitingSecondsRemaining: number | null;
+  } {
+    const now = new Date();
+    if (game.state === BingoGameState.WAITING) {
+      const createdAt = new Date(game.createdAt).getTime();
+      const elapsedSeconds = Math.max(0, Math.floor((now.getTime() - createdAt) / 1000));
+      const waitingSecondsRemaining = Math.max(0, 10 - elapsedSeconds);
+      return {
+        elapsedSeconds,
+        secondsToNextDraw: waitingSecondsRemaining,
+        nextDrawAt: new Date(createdAt + 10000),
+        superbingoCountdown: game.persistedSnapshot?.superbingoThreshold ?? null,
+        waitingSecondsRemaining,
+      };
+    }
+
+    const startAt = game.startAt ? new Date(game.startAt).getTime() : now.getTime();
+    const elapsedSeconds = Math.max(0, Math.floor((now.getTime() - startAt) / 1000));
+    const lastDrawAt = rounds.length ? new Date(rounds[rounds.length - 1].drawnAt).getTime() : startAt;
+    const secondsSinceLastDraw = Math.max(0, (now.getTime() - lastDrawAt) / 1000);
+    const secondsToNextDraw = Math.max(0, 1 - secondsSinceLastDraw);
+    const nextDrawAt = new Date(lastDrawAt + 1000);
+    const superbingoThreshold = game.persistedSnapshot?.superbingoThreshold ?? null;
+    const superbingoCountdown = superbingoThreshold !== null ? Math.max(0, superbingoThreshold - game.currentRound) : null;
+
+    return {
+      elapsedSeconds,
+      secondsToNextDraw,
+      nextDrawAt,
+      superbingoCountdown,
+      waitingSecondsRemaining: null,
+    };
+  }
+
   private getSuperbingoThreshold(): number {
     return Math.floor(Math.random() * 21) + 50;
   }
@@ -676,6 +715,7 @@ export class BingoService implements OnModuleInit {
 
     const drawnNumbers = rounds.map((round) => round.drawnNumber);
     const currentBall = drawnNumbers.length ? drawnNumbers[drawnNumbers.length - 1] : null;
+    const timing = this.getGameTiming(game, rounds);
 
     return {
       game: {
@@ -690,6 +730,11 @@ export class BingoService implements OnModuleInit {
         persistedSnapshot: game.persistedSnapshot,
         superbingoThreshold: game.persistedSnapshot?.superbingoThreshold ?? null,
         superbingoValue: game.resultSummary?.superbingo ?? null,
+        elapsedSeconds: timing.elapsedSeconds,
+        secondsToNextDraw: timing.secondsToNextDraw,
+        nextDrawAt: timing.nextDrawAt,
+        superbingoCountdown: timing.superbingoCountdown,
+        waitingSecondsRemaining: timing.waitingSecondsRemaining,
       },
       ticket: ticket ? { playerId: ticket.playerId, cardIds: ticket.cardIds } : null,
       cards: cards.map((card) => ({
