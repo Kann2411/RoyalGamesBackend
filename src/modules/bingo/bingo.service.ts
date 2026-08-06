@@ -322,7 +322,8 @@ export class BingoService implements OnModuleInit {
       state: BingoGameState.RUNNING,
       latestDraw: null,
     };
-    return this.gameRepository.save(game);
+
+    return this.prepareGamePlan(game);
   }
 
   async drawNumber(gameId: string): Promise<BingoRound> {
@@ -338,8 +339,11 @@ export class BingoService implements OnModuleInit {
       throw new BadRequestException('All bingo numbers have already been drawn');
     }
 
+    const plannedDraws: number[] = game.persistedSnapshot?.plannedDraws ?? [];
     const roundNumber = game.currentRound + 1;
-    const drawnNumber = remainingNumbers[Math.floor(Math.random() * remainingNumbers.length)];
+    const drawnNumber = plannedDraws.length >= roundNumber
+      ? plannedDraws[roundNumber - 1]
+      : remainingNumbers[Math.floor(Math.random() * remainingNumbers.length)];
 
     const round = this.roundRepository.create({
       gameId: game.id,
@@ -686,22 +690,111 @@ export class BingoService implements OnModuleInit {
     }
 
     await this.gameRepository.save(game);
+
+    if (bingoFoundThisRound) {
+      await this.createGame({ roomId: game.roomId, config: {} });
+    }
   }
 
-  private generateUniqueCardNumbers(existingCardKeys: Set<string>, count = 15): number[] {
-    let numbers: number[];
-    let key: string;
-    do {
-      numbers = this.generateCardNumbers(count);
-      key = numbers.join(',');
-    } while (existingCardKeys.has(key));
+  private async prepareGamePlan(game: BingoGame): Promise<BingoGame> {
+    const cards = await this.cardRepository.find({ where: { gameId: game.id } });
+    const plannedDraws = this.generateRandomSequence(90);
+    const superbingoThreshold = game.persistedSnapshot?.superbingoThreshold ?? this.getSuperbingoThreshold();
+    const { plannedEndRound, plannedWinnerEvents } = this.planWinnerEvents(cards, plannedDraws, superbingoThreshold);
+    const prizeAmounts = this.calculatePrizeAmounts(cards.length);
 
-    existingCardKeys.add(key);
-    return numbers;
+    game.persistedSnapshot = {
+      ...game.persistedSnapshot,
+      plannedDraws,
+      plannedEndRound,
+      plannedWinnerEvents,
+      plannedPrizeAmounts: prizeAmounts,
+    };
+
+    return this.gameRepository.save(game);
+  }
+
+  private generateRandomSequence(count = 90): number[] {
+    const pool = Array.from({ length: count }, (_, i) => i + 1);
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    return pool;
+  }
+
+  private planWinnerEvents(
+    cards: BingoCard[],
+    plannedDraws: number[],
+    superbingoThreshold: number,
+  ): { plannedEndRound: number; plannedWinnerEvents: Array<{ playerId: string; cardId: string; winType: BingoWinType; prizeAmount: number; roundNumber: number }> } {
+    let plannedEndRound = 90;
+    const plannedWinnerEvents: Array<{ playerId: string; cardId: string; winType: BingoWinType; prizeAmount: number; roundNumber: number }> = [];
+    const drawPosition = new Map<number, number>();
+    plannedDraws.forEach((value, index) => drawPosition.set(value, index + 1));
+    const prizeAmounts = this.calculatePrizeAmounts(cards.length);
+
+    for (const card of cards) {
+      const rows = [
+        card.numbers.slice(0, 5),
+        card.numbers.slice(5, 10),
+        card.numbers.slice(10, 15),
+      ];
+      const rowRounds = rows.map((row) => Math.max(...row.map((num) => drawPosition.get(num) ?? 90)));
+      const sortedRowRounds = [...rowRounds].sort((a, b) => a - b);
+      const lineRound = sortedRowRounds[0];
+      const doubleLineRound = sortedRowRounds[1] ?? 90;
+      const bingoRound = Math.max(...rowRounds);
+
+      if (lineRound <= 90) {
+        plannedWinnerEvents.push({
+          playerId: card.ownerId,
+          cardId: card.id,
+          winType: BingoWinType.LINE,
+          prizeAmount: prizeAmounts.line,
+          roundNumber: lineRound,
+        });
+      }
+
+      if (doubleLineRound <= 90) {
+        plannedWinnerEvents.push({
+          playerId: card.ownerId,
+          cardId: card.id,
+          winType: BingoWinType.DOUBLE_LINE,
+          prizeAmount: prizeAmounts.doubleLine,
+          roundNumber: doubleLineRound,
+        });
+      }
+
+      if (bingoRound <= 90) {
+        plannedWinnerEvents.push({
+          playerId: card.ownerId,
+          cardId: card.id,
+          winType: BingoWinType.BINGO,
+          prizeAmount: prizeAmounts.bingo,
+          roundNumber: bingoRound,
+        });
+        plannedEndRound = Math.min(plannedEndRound, bingoRound);
+
+        if (bingoRound <= superbingoThreshold) {
+          plannedWinnerEvents.push({
+            playerId: card.ownerId,
+            cardId: card.id,
+            winType: BingoWinType.SUPERBINGO,
+            prizeAmount: 0,
+            roundNumber: bingoRound,
+          });
+        }
+      }
+    }
+
+    return { plannedEndRound, plannedWinnerEvents };
   }
 
   private validateCustomCardNumbers(numbers: number[], existingCardKeys: Set<string>): number[] {
-    if (numbers.length !== 15) {
+    if (!Array.isArray(numbers) || numbers.length !== 15) {
       throw new BadRequestException('Custom card must contain exactly 15 numbers');
     }
 
@@ -710,7 +803,7 @@ export class BingoService implements OnModuleInit {
       throw new BadRequestException('Custom card numbers must be unique');
     }
 
-    if (numbers.some((n) => n < 1 || n > 90)) {
+    if (numbers.some((n) => typeof n !== 'number' || n < 1 || n > 90)) {
       throw new BadRequestException('Custom card numbers must be between 1 and 90');
     }
 
@@ -718,6 +811,23 @@ export class BingoService implements OnModuleInit {
     const key = sorted.join(',');
     if (existingCardKeys.has(key)) {
       throw new BadRequestException('Custom card numbers duplicate an existing card');
+    }
+
+    existingCardKeys.add(key);
+    return sorted;
+  }
+
+  private generateUniqueCardNumbers(existingCardKeys: Set<string>, count = 15): number[] {
+    const selectedNumbers = new Set<number>();
+    while (selectedNumbers.size < count) {
+      const candidate = Math.floor(Math.random() * 90) + 1;
+      selectedNumbers.add(candidate);
+    }
+
+    const sorted = [...selectedNumbers].sort((a, b) => a - b);
+    const key = sorted.join(',');
+    if (existingCardKeys.has(key)) {
+      return this.generateUniqueCardNumbers(existingCardKeys, count);
     }
 
     existingCardKeys.add(key);
