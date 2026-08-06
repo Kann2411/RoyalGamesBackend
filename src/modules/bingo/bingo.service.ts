@@ -126,8 +126,20 @@ export class BingoService implements OnModuleInit {
         }
 
         if (game.state === BingoGameState.WAITING) {
-          const createdAt = new Date(game.createdAt).getTime();
-          if (now.getTime() - createdAt >= 10000) {
+          const tickets = await this.ticketRepository.find({ where: { gameId: game.id } });
+          if (tickets.length === 0) {
+            continue;
+          }
+
+          const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt
+            ? new Date(game.persistedSnapshot.purchaseStartedAt).getTime()
+            : null;
+
+          if (!purchaseStartedAt) {
+            continue;
+          }
+
+          if (now.getTime() - purchaseStartedAt >= 10000) {
             await this.startGame(game.id);
           }
           continue;
@@ -233,7 +245,7 @@ export class BingoService implements OnModuleInit {
       state: BingoGameState.WAITING,
       currentRound: 0,
       resultSummary: { line: 0, doubleLine: 0, bingo: 0, superbingo: 0 },
-      persistedSnapshot: { state: BingoGameState.WAITING, superbingoThreshold, latestDraw: null },
+      persistedSnapshot: { state: BingoGameState.WAITING, superbingoThreshold, latestDraw: null, purchaseStartedAt: null },
     });
 
     const saved = await this.gameRepository.save(game);
@@ -429,6 +441,14 @@ export class BingoService implements OnModuleInit {
     existingTicket.cardIds = [...(existingTicket.cardIds || []), ...savedCards.map((c) => c.id)];
     await this.ticketRepository.save(existingTicket);
 
+    if (!game.persistedSnapshot?.purchaseStartedAt) {
+      game.persistedSnapshot = {
+        ...game.persistedSnapshot,
+        purchaseStartedAt: new Date().toISOString(),
+      };
+      await this.gameRepository.save(game);
+    }
+
     return { ticket: existingTicket, cards: savedCards };
   }
 
@@ -467,18 +487,31 @@ export class BingoService implements OnModuleInit {
     nextDrawAt: Date | null;
     superbingoCountdown: number | null;
     waitingSecondsRemaining: number | null;
+    purchaseStartedAt: string | null;
   } {
     const now = new Date();
     if (game.state === BingoGameState.WAITING) {
-      const createdAt = new Date(game.createdAt).getTime();
-      const elapsedSeconds = Math.max(0, Math.floor((now.getTime() - createdAt) / 1000));
+      const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt ? new Date(game.persistedSnapshot.purchaseStartedAt).getTime() : null;
+      if (!purchaseStartedAt) {
+        return {
+          elapsedSeconds: 0,
+          secondsToNextDraw: 10,
+          nextDrawAt: null,
+          superbingoCountdown: game.persistedSnapshot?.superbingoThreshold ?? null,
+          waitingSecondsRemaining: 10,
+          purchaseStartedAt: null,
+        };
+      }
+
+      const elapsedSeconds = Math.max(0, Math.floor((now.getTime() - purchaseStartedAt) / 1000));
       const waitingSecondsRemaining = Math.max(0, 10 - elapsedSeconds);
       return {
         elapsedSeconds,
         secondsToNextDraw: waitingSecondsRemaining,
-        nextDrawAt: new Date(createdAt + 10000),
+        nextDrawAt: new Date(purchaseStartedAt + 10000),
         superbingoCountdown: game.persistedSnapshot?.superbingoThreshold ?? null,
         waitingSecondsRemaining,
+        purchaseStartedAt: game.persistedSnapshot.purchaseStartedAt,
       };
     }
 
@@ -497,6 +530,7 @@ export class BingoService implements OnModuleInit {
       nextDrawAt,
       superbingoCountdown,
       waitingSecondsRemaining: null,
+      purchaseStartedAt: game.persistedSnapshot?.purchaseStartedAt ?? null,
     };
   }
 
@@ -713,28 +747,33 @@ export class BingoService implements OnModuleInit {
       cards = await this.cardRepository.find({ where: { gameId, ownerId: playerId } });
     }
 
-    const drawnNumbers = rounds.map((round) => round.drawnNumber);
-    const currentBall = drawnNumbers.length ? drawnNumbers[drawnNumbers.length - 1] : null;
     const timing = this.getGameTiming(game, rounds);
+    const isWaiting = game.state === BingoGameState.WAITING;
+    const roundsResponse = isWaiting ? [] : rounds.map((round) => ({ roundNumber: round.roundNumber, number: round.drawnNumber, drawnAt: round.drawnAt }));
+    const drawnNumbers = isWaiting ? [] : rounds.map((round) => round.drawnNumber);
+    const currentBall = isWaiting ? null : drawnNumbers.length ? drawnNumbers[drawnNumbers.length - 1] : null;
+    const winnersResponse = isWaiting ? [] : winners.map((winner) => ({ id: winner.id, playerId: winner.playerId, cardId: winner.cardId, prizeAmount: winner.prizeAmount, winType: winner.winType }));
+    const resultSummary = isWaiting ? {} : game.resultSummary || {};
 
     return {
       game: {
         id: game.id,
         state: game.state,
         currentRound: game.currentRound,
-        rounds: rounds.map((round) => ({ roundNumber: round.roundNumber, number: round.drawnNumber, drawnAt: round.drawnAt })),
+        rounds: roundsResponse,
         drawnNumbers,
         currentBall,
         superbingoPoolId: game.superbingoPoolId,
-        resultSummary: game.resultSummary,
+        resultSummary,
         persistedSnapshot: game.persistedSnapshot,
         superbingoThreshold: game.persistedSnapshot?.superbingoThreshold ?? null,
-        superbingoValue: game.resultSummary?.superbingo ?? null,
+        superbingoValue: isWaiting ? null : game.resultSummary?.superbingo ?? null,
         elapsedSeconds: timing.elapsedSeconds,
         secondsToNextDraw: timing.secondsToNextDraw,
         nextDrawAt: timing.nextDrawAt,
         superbingoCountdown: timing.superbingoCountdown,
         waitingSecondsRemaining: timing.waitingSecondsRemaining,
+        purchaseStartedAt: timing.purchaseStartedAt,
       },
       ticket: ticket ? { playerId: ticket.playerId, cardIds: ticket.cardIds } : null,
       cards: cards.map((card) => ({
@@ -744,13 +783,7 @@ export class BingoService implements OnModuleInit {
         claimedLines: card.claimedLines,
         isWinning: card.isWinning,
       })),
-      winners: winners.map((winner) => ({
-        id: winner.id,
-        playerId: winner.playerId,
-        cardId: winner.cardId,
-        prizeAmount: winner.prizeAmount,
-        winType: winner.winType,
-      })),
+      winners: winnersResponse,
     };
   }
 
