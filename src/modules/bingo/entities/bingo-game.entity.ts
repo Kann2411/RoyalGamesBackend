@@ -16,6 +16,7 @@ import { BingoRound } from './bingo-round.entity';
 import { BingoWinner } from './bingo-winner.entity';
 import { BingoSuperBingoPool } from './bingo-super-bingo-pool.entity';
 import { BingoAudit } from './bingo-audit.entity';
+import { ApiHideProperty } from '@nestjs/swagger';
 
 export enum BingoGameState {
   WAITING = 'waiting',
@@ -33,6 +34,7 @@ export class BingoGame {
   @Column({ type: 'uuid' })
   roomId: string;
 
+  @ApiHideProperty()
   @ManyToOne(() => BingoRoom, (room) => room.games, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'roomId' })
   room: BingoRoom;
@@ -52,6 +54,7 @@ export class BingoGame {
   @Column({ type: 'uuid', nullable: true })
   superbingoPoolId: string;
 
+  @ApiHideProperty()
   @ManyToOne(() => BingoSuperBingoPool, { nullable: true })
   @JoinColumn({ name: 'superbingoPoolId' })
   superbingoPool: BingoSuperBingoPool;
@@ -68,18 +71,23 @@ export class BingoGame {
   @UpdateDateColumn()
   updatedAt: Date;
 
+  @ApiHideProperty()
   @OneToMany(() => BingoTicket, (ticket) => ticket.game)
   tickets: BingoTicket[];
 
+  @ApiHideProperty()
   @OneToMany(() => BingoCard, (card) => card.game)
   cards: BingoCard[];
 
+  @ApiHideProperty()
   @OneToMany(() => BingoRound, (round) => round.game)
   rounds: BingoRound[];
 
+  @ApiHideProperty()
   @OneToMany(() => BingoWinner, (winner) => winner.game)
   winners: BingoWinner[];
 
+  @ApiHideProperty()
   @OneToMany(() => BingoAudit, (audit) => audit.game)
   audits: BingoAudit[];
 }

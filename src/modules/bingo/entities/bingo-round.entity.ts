@@ -7,6 +7,7 @@ import {
   JoinColumn,
   Index,
 } from 'typeorm';
+import { ApiHideProperty } from '@nestjs/swagger';
 import { BingoGame } from './bingo-game.entity';
 
 @Entity('bingo_rounds')
@@ -18,6 +19,7 @@ export class BingoRound {
   @Column({ type: 'uuid' })
   gameId: string;
 
+  @ApiHideProperty()
   @ManyToOne(() => BingoGame, (game) => game.rounds, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'gameId' })
   game: BingoGame;
