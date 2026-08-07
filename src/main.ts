@@ -93,7 +93,14 @@ async function bootstrap() {
     .addTag('Mailing', 'Email services')
     .build();
 
-  const document = SwaggerModule.createDocument(app, config);
+  let document;
+  try {
+    document = SwaggerModule.createDocument(app, config);
+  } catch (swaggerError) {
+    console.warn('Swagger schema generation failed, continuing without docs:', swaggerError);
+    document = { openapi: '3.0.0', info: { title: 'Royal Games API', version: '2.0.0' } };
+  }
+
   SwaggerModule.setup('api/docs', app, document);
 
   const port = process.env.PORT || 3001;
