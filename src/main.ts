@@ -3,7 +3,7 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { SwaggerModule, DocumentBuilder, OpenAPIObject } from '@nestjs/swagger';
 import morgan from 'morgan';
 import cors from 'cors';
 import MercadoPagoConfig from 'mercadopago';
@@ -93,12 +93,17 @@ async function bootstrap() {
     .addTag('Mailing', 'Email services')
     .build();
 
-  let document;
+  let document: OpenAPIObject;
   try {
     document = SwaggerModule.createDocument(app, config);
   } catch (swaggerError) {
     console.warn('Swagger schema generation failed, continuing without docs:', swaggerError);
-    document = { openapi: '3.0.0', info: { title: 'Royal Games API', version: '2.0.0' } };
+    document = {
+      openapi: '3.0.0',
+      info: { title: 'Royal Games API', version: '2.0.0' },
+      paths: {},
+      components: {},
+    } as OpenAPIObject;
   }
 
   SwaggerModule.setup('api/docs', app, document);
