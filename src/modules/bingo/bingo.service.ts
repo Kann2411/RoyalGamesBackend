@@ -24,6 +24,7 @@ import { UpdateCardMarksDto } from './dtos/update-card-marks.dto';
 
 @Injectable()
 export class BingoService implements OnModuleInit {
+  private readonly purchaseWindowSeconds = 10;
   private bingoEngineInterval: NodeJS.Timeout;
   private engineLock = false;
 
@@ -126,8 +127,8 @@ export class BingoService implements OnModuleInit {
         }
 
         if (game.state === BingoGameState.WAITING) {
-          const tickets = await this.ticketRepository.find({ where: { gameId: game.id } });
-          if (tickets.length === 0) {
+          const cards = await this.cardRepository.find({ where: { gameId: game.id } });
+          if (cards.length === 0) {
             continue;
           }
 
@@ -136,10 +137,15 @@ export class BingoService implements OnModuleInit {
             : null;
 
           if (!purchaseStartedAt) {
+            game.persistedSnapshot = {
+              ...game.persistedSnapshot,
+              purchaseStartedAt: now.toISOString(),
+            };
+            await this.gameRepository.save(game);
             continue;
           }
 
-          if (now.getTime() - purchaseStartedAt >= 10000) {
+          if (now.getTime() - purchaseStartedAt >= this.purchaseWindowSeconds * 1000) {
             await this.startGame(game.id);
           }
           continue;
@@ -315,6 +321,11 @@ export class BingoService implements OnModuleInit {
       throw new BadRequestException('Game already started');
     }
 
+    const cards = await this.cardRepository.find({ where: { gameId: game.id } });
+    if (cards.length === 0) {
+      throw new BadRequestException('Cannot start a game without purchased cards');
+    }
+
     game.state = BingoGameState.RUNNING;
     game.startAt = new Date();
     game.persistedSnapshot = {
@@ -445,7 +456,7 @@ export class BingoService implements OnModuleInit {
     existingTicket.cardIds = [...(existingTicket.cardIds || []), ...savedCards.map((c) => c.id)];
     await this.ticketRepository.save(existingTicket);
 
-    if (!game.persistedSnapshot?.purchaseStartedAt) {
+    if (!game.persistedSnapshot?.purchaseStartedAt && savedCards.length > 0) {
       game.persistedSnapshot = {
         ...game.persistedSnapshot,
         purchaseStartedAt: new Date().toISOString(),
@@ -702,8 +713,14 @@ export class BingoService implements OnModuleInit {
     await this.gameRepository.save(game);
 
     if (bingoFoundThisRound) {
+      await this.cleanupFinishedGameData(game.id);
       await this.createGame({ roomId: game.roomId, config: {} });
     }
+  }
+
+  private async cleanupFinishedGameData(gameId: string): Promise<void> {
+    await this.cardRepository.delete({ gameId });
+    await this.ticketRepository.delete({ gameId });
   }
 
   private async prepareGamePlan(game: BingoGame): Promise<BingoGame> {
