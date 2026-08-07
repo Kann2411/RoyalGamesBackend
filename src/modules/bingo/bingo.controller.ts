@@ -5,6 +5,7 @@ import { CreateRoomDto } from './dtos/create-room.dto';
 import { CreateGameDto } from './dtos/create-game.dto';
 import { CreateCardDto } from './dtos/create-card.dto';
 import { UpdateCardMarksDto } from './dtos/update-card-marks.dto';
+import { InitializeGameDto } from './dtos/initialize-game.dto';
 
 @Controller('bingo')
 export class BingoController {
@@ -98,6 +99,11 @@ export class BingoController {
   @Post('games/:id/start')
   startGame(@Param('id') gameId: string) {
     return this.bingoService.startGame(gameId);
+  }
+
+  @Post('games/:id/initialize')
+  initializeGame(@Param('id') gameId: string, @Body() dto: InitializeGameDto) {
+    return this.bingoService.initializeGame(gameId, dto);
   }
 
   @Post('games/:id/draw')

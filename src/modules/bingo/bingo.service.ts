@@ -21,6 +21,7 @@ import { CreateRoomDto } from './dtos/create-room.dto';
 import { CreateGameDto } from './dtos/create-game.dto';
 import { CreateCardDto } from './dtos/create-card.dto';
 import { UpdateCardMarksDto } from './dtos/update-card-marks.dto';
+import { InitializeGameDto } from './dtos/initialize-game.dto';
 
 @Injectable()
 export class BingoService implements OnModuleInit {
@@ -235,14 +236,31 @@ export class BingoService implements OnModuleInit {
   async createGame(dto: CreateGameDto & { roomId: string }): Promise<BingoGame> {
     const room = await this.getRoom(dto.roomId);
 
-    // Reuse an existing waiting or running game for the room if present
-    const existing = await this.gameRepository.findOne({ where: { roomId: room.id, state: BingoGameState.WAITING } });
+    const existing = await this.gameRepository.findOne({
+      where: { roomId: room.id, state: BingoGameState.WAITING },
+      order: { createdAt: 'DESC' },
+    });
     if (existing) {
       return existing;
     }
-    const running = await this.gameRepository.findOne({ where: { roomId: room.id, state: BingoGameState.RUNNING } });
+
+    const running = await this.gameRepository.findOne({
+      where: { roomId: room.id, state: BingoGameState.RUNNING },
+      order: { createdAt: 'DESC' },
+    });
     if (running) {
-      return running;
+      const [cards, tickets, rounds] = await Promise.all([
+        this.cardRepository.find({ where: { gameId: running.id } }),
+        this.ticketRepository.find({ where: { gameId: running.id } }),
+        this.roundRepository.find({ where: { gameId: running.id } }),
+      ]);
+
+      const hasActiveActivity = cards.length > 0 || tickets.length > 0 || rounds.length > 0;
+      if (!hasActiveActivity) {
+        await this.resetGameToWaiting(running);
+      } else {
+        return running;
+      }
     }
 
     const superbingoThreshold = this.getSuperbingoThreshold();
@@ -303,16 +321,36 @@ export class BingoService implements OnModuleInit {
   }
 
   async getRoomCurrentGame(roomId: string): Promise<BingoGame> {
-    const game = await this.gameRepository.findOne({
-      where: [
-        { roomId, state: BingoGameState.WAITING },
-        { roomId, state: BingoGameState.RUNNING },
-      ],
+    const waitingGames = await this.gameRepository.find({
+      where: { roomId, state: BingoGameState.WAITING },
+      order: { createdAt: 'DESC' },
     });
-    if (!game) {
-      throw new NotFoundException('No current game for room');
+
+    if (waitingGames.length > 0) {
+      return waitingGames[0];
     }
-    return game;
+
+    const runningGames = await this.gameRepository.find({
+      where: { roomId, state: BingoGameState.RUNNING },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (runningGames.length > 0) {
+      const [cards, tickets, rounds] = await Promise.all([
+        this.cardRepository.find({ where: { gameId: runningGames[0].id } }),
+        this.ticketRepository.find({ where: { gameId: runningGames[0].id } }),
+        this.roundRepository.find({ where: { gameId: runningGames[0].id } }),
+      ]);
+
+      if (cards.length === 0 && tickets.length === 0 && rounds.length === 0) {
+        await this.resetGameToWaiting(runningGames[0]);
+        return this.createGame({ roomId, config: {} });
+      }
+
+      return runningGames[0];
+    }
+
+    return this.createGame({ roomId, config: {} });
   }
 
   async startGame(gameId: string): Promise<BingoGame> {
@@ -334,7 +372,60 @@ export class BingoService implements OnModuleInit {
       latestDraw: null,
     };
 
-    return this.prepareGamePlan(game);
+    await this.prepareGamePlan(game);
+    await this.drawNumber(game.id);
+    return this.getGame(game.id);
+  }
+
+  async initializeGame(gameId: string, dto: InitializeGameDto): Promise<BingoGame> {
+    const game = await this.getGame(gameId);
+    if (game.state === BingoGameState.FINISHED) {
+      throw new BadRequestException('Cannot initialize a finished game');
+    }
+
+    const normalizedState = dto.state ?? BingoGameState.RUNNING;
+    game.state = normalizedState as BingoGameState;
+    game.currentRound = dto.currentRound ?? 0;
+    game.startAt = dto.startAt ? new Date(dto.startAt) : game.startAt ?? new Date();
+    game.endAt = dto.endAt ? new Date(dto.endAt) : (undefined as unknown as Date);
+    game.resultSummary = dto.resultSummary ?? game.resultSummary ?? { line: 0, doubleLine: 0, bingo: 0, superbingo: 0 };
+
+    const roundsToPersist = (dto.rounds ?? []).map((round, index) => ({
+      gameId: game.id,
+      roundNumber: round.roundNumber ?? index + 1,
+      drawnNumber: round.number,
+      drawnAt: round.drawnAt ? new Date(round.drawnAt) : new Date(),
+    }));
+
+    if (roundsToPersist.length > 0) {
+      await this.roundRepository.delete({ gameId });
+      const roundEntities = this.roundRepository.create(roundsToPersist);
+      await this.roundRepository.save(roundEntities);
+    }
+
+    if ((dto.winners ?? []).length > 0) {
+      await this.winnerRepository.delete({ gameId });
+      const winners = (dto.winners ?? []).map((winner) => this.winnerRepository.create({
+        gameId: game.id,
+        playerId: winner.playerId,
+        cardId: winner.cardId,
+        winType: winner.winType as any,
+        prizeAmount: winner.prizeAmount,
+      }));
+      await this.winnerRepository.save(winners);
+    }
+
+    game.persistedSnapshot = {
+      ...(game.persistedSnapshot ?? {}),
+      state: normalizedState,
+      latestDraw: dto.currentBall ?? dto.drawnNumbers?.[dto.drawnNumbers.length - 1] ?? null,
+      purchaseStartedAt: game.persistedSnapshot?.purchaseStartedAt ?? null,
+      plannedDraws: dto.drawnNumbers ?? [],
+      plannedPrizeAmounts: dto.prizes ?? null,
+      superbingoThreshold: dto.superbingoThreshold ?? game.persistedSnapshot?.superbingoThreshold ?? null,
+    };
+
+    return this.gameRepository.save(game);
   }
 
   async drawNumber(gameId: string): Promise<BingoRound> {
@@ -718,9 +809,32 @@ export class BingoService implements OnModuleInit {
     }
   }
 
+  private async resetGameToWaiting(game: BingoGame): Promise<BingoGame> {
+    await this.cardRepository.delete({ gameId: game.id });
+    await this.ticketRepository.delete({ gameId: game.id });
+    await this.roundRepository.delete({ gameId: game.id });
+    await this.winnerRepository.delete({ gameId: game.id });
+
+    game.state = BingoGameState.WAITING;
+    game.currentRound = 0;
+    game.startAt = undefined as unknown as Date;
+    game.endAt = undefined as unknown as Date;
+    game.resultSummary = { line: 0, doubleLine: 0, bingo: 0, superbingo: 0 };
+    game.persistedSnapshot = {
+      ...(game.persistedSnapshot ?? {}),
+      state: BingoGameState.WAITING,
+      latestDraw: null,
+      purchaseStartedAt: null,
+    };
+
+    return this.gameRepository.save(game);
+  }
+
   private async cleanupFinishedGameData(gameId: string): Promise<void> {
     await this.cardRepository.delete({ gameId });
     await this.ticketRepository.delete({ gameId });
+    await this.roundRepository.delete({ gameId });
+    await this.winnerRepository.delete({ gameId });
   }
 
   private async prepareGamePlan(game: BingoGame): Promise<BingoGame> {
@@ -873,7 +987,20 @@ export class BingoService implements OnModuleInit {
 
   async getGameState(gameId: string, playerId?: string): Promise<Record<string, any>> {
     await this.cleanupInvalidCards(gameId);
-    const game = await this.getGame(gameId);
+    let game = await this.getGame(gameId);
+
+    if (game.state === BingoGameState.RUNNING) {
+      const [cards, tickets, rounds] = await Promise.all([
+        this.cardRepository.find({ where: { gameId } }),
+        this.ticketRepository.find({ where: { gameId } }),
+        this.roundRepository.find({ where: { gameId }, order: { roundNumber: 'ASC' } }),
+      ]);
+
+      if (cards.length === 0 && tickets.length === 0 && rounds.length === 0) {
+        game = await this.resetGameToWaiting(game);
+      }
+    }
+
     const rounds = await this.roundRepository.find({ where: { gameId }, order: { roundNumber: 'ASC' } });
     const winners = await this.winnerRepository.find({ where: { gameId } });
     const superbingoPool = game.superbingoPoolId

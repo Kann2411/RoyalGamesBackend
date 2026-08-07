@@ -26,6 +26,13 @@ describe('BingoService', () => {
       create: jest.fn(),
       delete: jest.fn(),
     };
+    const roundRepository = {
+      find: jest.fn(),
+      delete: jest.fn(),
+    };
+    const winnerRepository = {
+      delete: jest.fn(),
+    };
 
     service = new BingoService(
       {} as any,
@@ -33,9 +40,9 @@ describe('BingoService', () => {
       gameRepository as any,
       ticketRepository as any,
       cardRepository as any,
+      roundRepository as any,
       {} as any,
-      {} as any,
-      {} as any,
+      winnerRepository as any,
       {} as any,
     );
   });
@@ -53,5 +60,18 @@ describe('BingoService', () => {
 
     expect(cardRepository.delete).toHaveBeenCalledWith({ gameId: 'game-1' });
     expect(ticketRepository.delete).toHaveBeenCalledWith({ gameId: 'game-1' });
+  });
+
+  it('draws the first ball immediately when a game starts', async () => {
+    const game = { id: 'game-1', state: BingoGameState.WAITING, persistedSnapshot: {}, currentRound: 0 };
+    gameRepository.findOne.mockResolvedValue(game);
+    cardRepository.find.mockResolvedValue([{}]);
+    const drawSpy = jest.spyOn(service, 'drawNumber').mockResolvedValue({} as any);
+    const prepareSpy = jest.spyOn(service as any, 'prepareGamePlan').mockResolvedValue(game);
+
+    await service.startGame('game-1');
+
+    expect(prepareSpy).toHaveBeenCalledWith(expect.objectContaining({ id: 'game-1' }));
+    expect(drawSpy).toHaveBeenCalledWith('game-1');
   });
 });
