@@ -23,6 +23,12 @@ export class BingoSuperBingoPool {
   @Column({ type: 'bigint', default: 0 })
   amount: number;
 
+  @Column({ type: 'int', default: 50 })
+  thresholdBall: number;
+
+  @Column({ type: 'bigint', default: 0 })
+  resetBaseAmount: number;
+
   @Column({ type: 'timestamp', nullable: true })
   lastUpdatedAt: Date;
 

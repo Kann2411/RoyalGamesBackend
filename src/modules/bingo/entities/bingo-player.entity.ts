@@ -5,10 +5,13 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
   OneToMany,
+  ManyToOne,
+  JoinColumn,
   Index,
 } from 'typeorm';
 import { BingoTicket } from './bingo-ticket.entity';
 import { BingoCard } from './bingo-card.entity';
+import { User } from '../../users/entities/user.entity';
 
 export enum BingoPlayerStatus {
   ONLINE = 'online',
@@ -30,6 +33,13 @@ export class BingoPlayer {
 
   @Column({ type: 'varchar', nullable: true })
   avatarUrl: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
+
+  @ManyToOne(() => User, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'userId' })
+  user: User;
 
   @Column({ type: 'bigint', default: 0 })
   chips: number;

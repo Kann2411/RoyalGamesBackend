@@ -51,6 +51,9 @@ export class BingoWinner {
   @Column({ type: 'enum', enum: BingoWinType })
   winType: BingoWinType;
 
+  @Column({ type: 'int', nullable: true })
+  roundNumber: number | null;
+
   @CreateDateColumn()
   createdAt: Date;
 }

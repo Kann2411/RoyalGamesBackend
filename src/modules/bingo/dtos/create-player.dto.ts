@@ -1,8 +1,12 @@
-import { IsString, IsOptional, IsNumber, Min } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsUUID, Min } from 'class-validator';
 
 export class CreatePlayerDto {
   @IsString()
   username: string;
+
+  @IsOptional()
+  @IsUUID()
+  userId?: string;
 
   @IsOptional()
   @IsString()

@@ -8,7 +8,9 @@ import morgan from 'morgan';
 import cors from 'cors';
 import MercadoPagoConfig from 'mercadopago';
 import { DataSource } from 'typeorm';
+import { WsAdapter } from '@nestjs/platform-ws';
 import { AppModule } from './app.module';
+import { ALLOWED_ORIGINS } from './config/cors-origins';
 
 async function bootstrap() {
   // Validate critical environment variables early to provide clear errors
@@ -53,22 +55,13 @@ async function bootstrap() {
   app.use(morgan('dev'));
   app.use(
     cors({
-      origin: [
-        'https://royal-front-new.vercel.app',
-        'http://localhost:5173',
-        'https://html-classic.itch.zone',
-        'https://royalpachinka.s3.us-east-2.amazonaws.com',
-        'https://minas2royal.s3.us-east-2.amazonaws.com',
-        'https://us-east-2.console.aws.amazon.com',
-        'https://aws.amazon.com',
-        'https://royaljoker1.s3.us-east-2.amazonaws.com',
-        'https://royalgames.lat',
-        'https://minasroyal.s3.us-east-2.amazonaws.com',
-        'https://baazaar.s3.us-east-2.amazonaws.com'
-      ],
+      origin: ALLOWED_ORIGINS,
       credentials: true,
     }),
   );
+
+  // WebSocket adapter (native `ws`, used by BingoGateway at /bingo/ws)
+  app.useWebSocketAdapter(new WsAdapter(app));
 
   // Global Pipes
   app.useGlobalPipes(

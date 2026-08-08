@@ -1,0 +1,62 @@
+import { Injectable } from '@nestjs/common';
+import type WebSocket from 'ws';
+import { WsEnvelope } from './ws-message.types';
+
+interface ConnectionMeta {
+  roomId: string;
+  playerId: string;
+}
+
+@Injectable()
+export class BingoConnectionRegistry {
+  private readonly roomSockets = new Map<string, Set<WebSocket>>();
+  private readonly socketMeta = new Map<WebSocket, ConnectionMeta>();
+
+  register(client: WebSocket, roomId: string, playerId: string): void {
+    if (!this.roomSockets.has(roomId)) {
+      this.roomSockets.set(roomId, new Set());
+    }
+    this.roomSockets.get(roomId)!.add(client);
+    this.socketMeta.set(client, { roomId, playerId });
+  }
+
+  unregister(client: WebSocket): void {
+    const meta = this.socketMeta.get(client);
+    if (!meta) {
+      return;
+    }
+    const sockets = this.roomSockets.get(meta.roomId);
+    sockets?.delete(client);
+    if (sockets && sockets.size === 0) {
+      this.roomSockets.delete(meta.roomId);
+    }
+    this.socketMeta.delete(client);
+  }
+
+  getMeta(client: WebSocket): ConnectionMeta | undefined {
+    return this.socketMeta.get(client);
+  }
+
+  getRoomConnectionCount(roomId: string): number {
+    return this.roomSockets.get(roomId)?.size ?? 0;
+  }
+
+  sendTo(client: WebSocket, envelope: WsEnvelope): void {
+    if (client.readyState === client.OPEN) {
+      client.send(JSON.stringify(envelope));
+    }
+  }
+
+  broadcastToRoom(roomId: string, envelope: WsEnvelope, exclude?: WebSocket): void {
+    const sockets = this.roomSockets.get(roomId);
+    if (!sockets) {
+      return;
+    }
+    const message = JSON.stringify(envelope);
+    for (const socket of sockets) {
+      if (socket !== exclude && socket.readyState === socket.OPEN) {
+        socket.send(message);
+      }
+    }
+  }
+}

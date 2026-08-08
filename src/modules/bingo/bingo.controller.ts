@@ -5,7 +5,6 @@ import { CreateRoomDto } from './dtos/create-room.dto';
 import { CreateGameDto } from './dtos/create-game.dto';
 import { CreateCardDto } from './dtos/create-card.dto';
 import { UpdateCardMarksDto } from './dtos/update-card-marks.dto';
-import { InitializeGameDto } from './dtos/initialize-game.dto';
 
 @Controller('bingo')
 export class BingoController {
@@ -109,26 +108,6 @@ export class BingoController {
   @Post('games/:id/join')
   joinGame(@Param('id') gameId: string, @Query('playerId') playerId: string) {
     return this.bingoService.joinGame(gameId, playerId);
-  }
-
-  @Post('games/:id/start')
-  startGame(@Param('id') gameId: string) {
-    return this.bingoService.startGame(gameId);
-  }
-
-  @Post('games/:id/initialize')
-  initializeGame(@Param('id') gameId: string, @Body() dto: InitializeGameDto) {
-    return this.bingoService.initializeGame(gameId, dto);
-  }
-
-  @Post('games/:id/draw')
-  drawNumber(@Param('id') gameId: string) {
-    return this.bingoService.drawNumber(gameId);
-  }
-
-  @Post('games/:id/claim')
-  claimWin(@Param('id') gameId: string, @Body() body: { cardId: string; claimType: string }) {
-    return this.bingoService.claimWin(gameId, body.cardId, body.claimType);
   }
 
   @Get('games/:id/history')
