@@ -232,7 +232,29 @@ export class BingoService {
       persistedSnapshot: { state: BingoGameState.WAITING, purchaseStartedAt: null },
     });
 
-    const saved = await this.gameRepository.save(game);
+    let saved: BingoGame;
+    try {
+      saved = await this.gameRepository.save(game);
+    } catch (err) {
+      // Race: someone else (a concurrent request, or the engine's own tick) created this room's
+      // active game between our check above and this insert - the DB-level unique index
+      // (UQ_bingo_games_active_room) is what actually prevents two WAITING/RUNNING games for the
+      // same room; fall back to whichever one won instead of erroring out.
+      if ((err as { code?: string }).code === '23505') {
+        const winner = await this.gameRepository.findOne({
+          where: [
+            { roomId: room.id, state: BingoGameState.WAITING },
+            { roomId: room.id, state: BingoGameState.RUNNING },
+          ],
+          order: { createdAt: 'DESC' },
+        });
+        if (winner) {
+          return winner;
+        }
+      }
+      throw err;
+    }
+
     await this.reservePoolForGame(saved.id, room.id).catch(() => undefined);
     return this.getGame(saved.id);
   }
@@ -1020,11 +1042,24 @@ export class BingoService {
   async getOrCreateSuperbingoForRoom(roomId: string, manager?: EntityManager): Promise<BingoSuperBingoPool> {
     const repo = manager ? manager.getRepository(BingoSuperBingoPool) : this.superbingoPoolRepository;
     let pool = await repo.findOne({ where: { roomId }, order: { updatedAt: 'DESC' } });
-    if (!pool) {
-      pool = repo.create({ roomId, amount: 0, lastUpdatedAt: new Date() });
-      pool = await repo.save(pool);
+    if (pool) {
+      return pool;
     }
-    return pool;
+
+    try {
+      pool = repo.create({ roomId, amount: 0, lastUpdatedAt: new Date() });
+      return await repo.save(pool);
+    } catch (err) {
+      // Same concurrent-creation race as BingoService.createGame: the DB-level unique index
+      // (UQ_bingo_super_bingo_pools_room) is the real guard, this just falls back gracefully.
+      if ((err as { code?: string }).code === '23505') {
+        const winner = await repo.findOne({ where: { roomId }, order: { updatedAt: 'DESC' } });
+        if (winner) {
+          return winner;
+        }
+      }
+      throw err;
+    }
   }
 
   async topupSuperbingo(amount: number, roomId?: string): Promise<BingoSuperBingoPool> {
