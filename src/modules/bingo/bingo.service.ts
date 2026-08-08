@@ -813,8 +813,18 @@ export class BingoService {
 
     for (let attempt = 0; attempt < 200; attempt++) {
       const columnCounts = new Array(columns).fill(1);
-      let extras = columns * numbersPerRow - columns; // 15 - 9 = 6
+      // Total numbers needed (rows * numbersPerRow = 15) minus the 1 already given to each
+      // column = how many more to hand out (6). This used to read `columns * numbersPerRow`
+      // (36) instead of `rows * numbersPerRow` (15), demanding far more extras than the 9
+      // columns have room for (max 3 each) - the while loop below could never satisfy that and
+      // spun forever, freezing the whole Node process (not just a DB connection) on every
+      // successful card purchase.
+      let extras = rows * numbersPerRow - columns; // 15 - 9 = 6
+      let safety = 0;
       while (extras > 0) {
+        if (++safety > 10000) {
+          throw new Error('generateStructuredCardNumbers: extras distribution did not converge');
+        }
         const col = Math.floor(Math.random() * columns);
         if (columnCounts[col] < rows) {
           columnCounts[col]++;
