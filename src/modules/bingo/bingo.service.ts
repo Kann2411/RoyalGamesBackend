@@ -1,5 +1,6 @@
 import {
   Injectable,
+  Logger,
   NotFoundException,
   BadRequestException,
   ConflictException,
@@ -43,6 +44,7 @@ interface PlannedWinnerEvent {
 
 @Injectable()
 export class BingoService {
+  private readonly logger = new Logger(BingoService.name);
   readonly purchaseWindowSeconds = 10;
 
   constructor(
@@ -344,6 +346,19 @@ export class BingoService {
    * (e.g. the engine tick firing twice) can't both start the same game.
    */
   async startGame(gameId: string): Promise<BingoGame> {
+    const startedAt = Date.now();
+    this.logger.log(`startGame:begin gameId=${gameId}`);
+    try {
+      const result = await this.startGameTransaction(gameId);
+      this.logger.log(`startGame:done gameId=${gameId} tookMs=${Date.now() - startedAt} state=${result.state}`);
+      return result;
+    } catch (err) {
+      this.logger.error(`startGame:failed gameId=${gameId} tookMs=${Date.now() - startedAt} error=${(err as Error).message}`);
+      throw err;
+    }
+  }
+
+  private async startGameTransaction(gameId: string): Promise<BingoGame> {
     return this.dataSource.transaction(async (manager) => {
       const claimed = await manager.update(
         BingoGame,
@@ -418,6 +433,19 @@ export class BingoService {
    * waiting game for the room so the loop continues on its own.
    */
   async finishGameAutomatically(gameId: string): Promise<Record<string, any>> {
+    const startedAt = Date.now();
+    this.logger.log(`finishGameAutomatically:begin gameId=${gameId}`);
+    try {
+      const outcome = await this.finishGameTransaction(gameId);
+      this.logger.log(`finishGameAutomatically:done gameId=${gameId} tookMs=${Date.now() - startedAt}`);
+      return outcome;
+    } catch (err) {
+      this.logger.error(`finishGameAutomatically:failed gameId=${gameId} tookMs=${Date.now() - startedAt} error=${(err as Error).message}`);
+      throw err;
+    }
+  }
+
+  private async finishGameTransaction(gameId: string): Promise<Record<string, any>> {
     const result = await this.dataSource.transaction(async (manager) => {
       const claimed = await manager.update(
         BingoGame,
@@ -493,6 +521,19 @@ export class BingoService {
    * validated and applied server-side.
    */
   async purchaseCard(gameId: string, playerId: string, dto: CreateCardDto): Promise<{ ticket: BingoTicket; cards: BingoCard[] }> {
+    const startedAt = Date.now();
+    this.logger.log(`purchaseCard:begin gameId=${gameId} playerId=${playerId} quantity=${dto.quantity ?? 1}`);
+    try {
+      const result = await this.purchaseCardTransaction(gameId, playerId, dto);
+      this.logger.log(`purchaseCard:done gameId=${gameId} playerId=${playerId} tookMs=${Date.now() - startedAt} cards=${result.cards.length}`);
+      return result;
+    } catch (err) {
+      this.logger.warn(`purchaseCard:failed gameId=${gameId} playerId=${playerId} tookMs=${Date.now() - startedAt} error=${(err as Error).message}`);
+      throw err;
+    }
+  }
+
+  private async purchaseCardTransaction(gameId: string, playerId: string, dto: CreateCardDto): Promise<{ ticket: BingoTicket; cards: BingoCard[] }> {
     return this.dataSource.transaction(async (manager) => {
       const game = await manager.findOne(BingoGame, { where: { id: gameId } });
       if (!game) {

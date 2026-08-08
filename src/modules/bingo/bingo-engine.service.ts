@@ -43,6 +43,16 @@ export class BingoEngineService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await this.bingoService.ensureDefaultRooms();
+
+    // Emergency kill switch: if the engine ever needs to be stopped in production without a
+    // redeploy (e.g. while diagnosing a DB issue), set BINGO_ENGINE_ENABLED=false in Render's
+    // environment variables and restart the service. Rooms simply stop advancing; nothing else
+    // in the app (users, chips, other games) depends on this loop.
+    if ((process.env.BINGO_ENGINE_ENABLED ?? 'true').toLowerCase() === 'false') {
+      this.logger.warn('BingoEngineService disabled via BINGO_ENGINE_ENABLED=false - rooms will not advance.');
+      return;
+    }
+
     this.interval = setInterval(() => {
       this.tick().catch((err) => this.logger.error(`Engine tick failed: ${err.message}`));
     }, 3000);
