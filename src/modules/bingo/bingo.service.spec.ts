@@ -36,6 +36,58 @@ function buildService(dataSourceOverrides: any = {}) {
 }
 
 describe('BingoService', () => {
+  describe('generateUniqueCardNumbers (private)', () => {
+    // Mirrors CartonManager.BuildCardNumbers() on the Unity client: buckets numbers into 9
+    // columns of 10 (81-90 for the last one) and greedily assigns each to the least-loaded row.
+    // If this ever returns fewer than 15 numbers, a real card would render with missing numbers.
+    function reconstructRowCounts(numbers: number[]): number[] {
+      const columns: number[][] = Array.from({ length: 9 }, () => []);
+      for (const n of numbers) {
+        const columnIndex = n === 90 ? 8 : Math.floor((n - 1) / 10);
+        columns[columnIndex].push(n);
+      }
+      const rowCounts = [0, 0, 0];
+      let placed = 0;
+      for (const column of columns) {
+        for (const _ of column) {
+          let bestRow = 0;
+          let bestCount = Infinity;
+          for (let r = 0; r < 3; r++) {
+            if (rowCounts[r] < 5 && rowCounts[r] < bestCount) {
+              bestRow = r;
+              bestCount = rowCounts[r];
+            }
+          }
+          rowCounts[bestRow]++;
+          placed++;
+        }
+      }
+      expect(placed).toBe(numbers.length);
+      return rowCounts;
+    }
+
+    it('always generates exactly 15 numbers that reconstruct into 5 numbers per row (no column overflow)', () => {
+      const { service } = buildService();
+      for (let i = 0; i < 200; i++) {
+        const numbers: number[] = (service as any).generateUniqueCardNumbers(new Set<string>());
+        expect(numbers).toHaveLength(15);
+        expect(new Set(numbers).size).toBe(15);
+
+        const columnCounts = new Array(9).fill(0);
+        for (const n of numbers) {
+          expect(n).toBeGreaterThanOrEqual(1);
+          expect(n).toBeLessThanOrEqual(90);
+          const columnIndex = n === 90 ? 8 : Math.floor((n - 1) / 10);
+          columnCounts[columnIndex]++;
+        }
+        expect(columnCounts.every((c) => c <= 3)).toBe(true);
+
+        const rowCounts = reconstructRowCounts(numbers);
+        expect(rowCounts).toEqual([5, 5, 5]);
+      }
+    });
+  });
+
   describe('planWinnerEvents (private)', () => {
     it('only awards bingo to the card(s) that hit it first; later cards get no bingo/superbingo event', () => {
       const { service } = buildService();

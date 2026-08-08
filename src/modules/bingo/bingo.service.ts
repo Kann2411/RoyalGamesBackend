@@ -746,21 +746,86 @@ export class BingoService {
     return sorted;
   }
 
+  /**
+   * Generates 15 numbers that form a VALID traditional bingo card: 9 columns of 10 numbers each
+   * (1-10, 11-20, ..., 81-90 - matching the column formula the Unity client uses to rebuild the
+   * 3x9 grid from this flat sorted array), each column holding 1-3 numbers, and exactly 5 numbers
+   * per row. A flat "any 15 unique numbers 1-90" pick (the previous implementation) can easily put
+   * 4+ numbers in the same column, which the client has nowhere valid to place - it silently drops
+   * the extra one, so cards would render with fewer than 15 numbers.
+   */
   private generateUniqueCardNumbers(existingCardKeys: Set<string>, count = 15): number[] {
-    const selectedNumbers = new Set<number>();
-    while (selectedNumbers.size < count) {
-      const candidate = Math.floor(Math.random() * 90) + 1;
-      selectedNumbers.add(candidate);
-    }
-
-    const sorted = [...selectedNumbers].sort((a, b) => a - b);
-    const key = sorted.join(',');
+    const numbers = this.generateStructuredCardNumbers();
+    const key = numbers.join(',');
     if (existingCardKeys.has(key)) {
       return this.generateUniqueCardNumbers(existingCardKeys, count);
     }
 
     existingCardKeys.add(key);
-    return sorted;
+    return numbers;
+  }
+
+  private generateStructuredCardNumbers(): number[] {
+    const columns = 9;
+    const rows = 3;
+    const numbersPerRow = 5;
+
+    for (let attempt = 0; attempt < 200; attempt++) {
+      const columnCounts = new Array(columns).fill(1);
+      let extras = columns * numbersPerRow - columns; // 15 - 9 = 6
+      while (extras > 0) {
+        const col = Math.floor(Math.random() * columns);
+        if (columnCounts[col] < rows) {
+          columnCounts[col]++;
+          extras--;
+        }
+      }
+
+      const rowRemaining = new Array(rows).fill(numbersPerRow);
+      const columnRows: number[][] = [];
+      let valid = true;
+
+      for (let col = 0; col < columns; col++) {
+        const available = [0, 1, 2].filter((row) => rowRemaining[row] > 0);
+        if (available.length < columnCounts[col]) {
+          valid = false;
+          break;
+        }
+        this.shuffleInPlace(available);
+        const chosenRows = available.slice(0, columnCounts[col]).sort((a, b) => a - b);
+        columnRows.push(chosenRows);
+        for (const row of chosenRows) {
+          rowRemaining[row]--;
+        }
+      }
+
+      if (!valid || rowRemaining.some((remaining) => remaining !== 0)) {
+        continue;
+      }
+
+      const numbers: number[] = [];
+      for (let col = 0; col < columns; col++) {
+        const rangeStart = col * 10 + 1;
+        const rangeEnd = col * 10 + 10;
+        const pool: number[] = [];
+        for (let n = rangeStart; n <= rangeEnd; n++) pool.push(n);
+        this.shuffleInPlace(pool);
+        numbers.push(...pool.slice(0, columnCounts[col]));
+      }
+
+      return numbers.sort((a, b) => a - b);
+    }
+
+    throw new Error('Unable to generate a structured bingo card after 200 attempts');
+  }
+
+  private shuffleInPlace<T>(items: T[]): void {
+    for (let i = items.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = items[i];
+      items[i] = items[j];
+      items[j] = tmp;
+    }
   }
 
   async updateCardMarks(gameId: string, cardId: string, dto: UpdateCardMarksDto): Promise<BingoCard> {
@@ -782,9 +847,8 @@ export class BingoService {
     const now = new Date();
     const progress = deriveGameProgress(game, now);
 
-    const [cards, tickets, winners, pool, room] = await Promise.all([
+    const [cards, winners, pool, room] = await Promise.all([
       this.cardRepository.find({ where: { gameId: game.id } }),
-      this.ticketRepository.find({ where: { gameId: game.id } }),
       this.winnerRepository.find({ where: { gameId: game.id } }),
       game.superbingoPoolId
         ? this.superbingoPoolRepository.findOne({ where: { id: game.superbingoPoolId } })
@@ -792,9 +856,15 @@ export class BingoService {
       this.roomRepository.findOne({ where: { id: game.roomId } }),
     ]);
 
+    // Players list is derived from CARDS (who actually bought something), not from tickets (which
+    // are created the moment someone joins the room, before buying anything) - otherwise the
+    // player count would show people who are merely present, before any purchase happened.
     const playersById = new Map<string, PlayerSummary>();
-    for (const ticket of tickets) {
-      playersById.set(ticket.playerId, { playerId: ticket.playerId, displayName: '', cardIds: [...(ticket.cardIds ?? [])] });
+    for (const card of cards) {
+      if (!playersById.has(card.ownerId)) {
+        playersById.set(card.ownerId, { playerId: card.ownerId, displayName: '', cardIds: [] });
+      }
+      playersById.get(card.ownerId)!.cardIds.push(card.id);
     }
     if (playersById.size > 0) {
       const players = await this.playerRepository.find({ where: { id: In(Array.from(playersById.keys())) } });
