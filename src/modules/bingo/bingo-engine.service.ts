@@ -11,11 +11,28 @@ import { deriveGameProgress, getPurchaseWindowRemaining } from './bingo-time.uti
  * notice the two state transitions (waiting -> running, running -> finished) and broadcast them;
  * "where the game is right now" is always derived from time, not from how often this tick fires.
  */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
 @Injectable()
 export class BingoEngineService implements OnModuleInit {
   private readonly logger = new Logger(BingoEngineService.name);
   private interval: NodeJS.Timeout;
   private locked = false;
+  private static readonly ROOM_TICK_TIMEOUT_MS = 12000;
 
   constructor(
     private readonly bingoService: BingoService,
@@ -40,50 +57,58 @@ export class BingoEngineService implements OnModuleInit {
 
       for (const room of rooms) {
         try {
-          const game = await this.bingoService.getRoomCurrentGame(room.id);
-
-          if (game.state === BingoGameState.WAITING) {
-            const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt ?? null;
-            const remaining = getPurchaseWindowRemaining(purchaseStartedAt, this.bingoService.purchaseWindowSeconds, now);
-            if (remaining === 0) {
-              const started = await this.bingoService.startGame(game.id);
-              if (started.state === BingoGameState.RUNNING) {
-                await this.gateway.broadcastGameStarted(room.id, started.id);
-              }
-            }
-            continue;
-          }
-
-          if (game.state === BingoGameState.RUNNING) {
-            const progress = deriveGameProgress(game, now);
-            if (progress.isFinished) {
-              const result = await this.bingoService.finishGameAutomatically(game.id);
-              const pool = await this.bingoService.getOrCreateSuperbingoForRoom(room.id);
-              await this.gateway.broadcastGameFinished(room.id, {
-                gameId: game.id,
-                resultSummary: result.game.resultSummary ?? {},
-                winners: result.winners.map((w: BingoWinner) => ({
-                  playerId: w.playerId,
-                  cardId: w.cardId,
-                  winType: w.winType,
-                  prizeAmount: Number(w.prizeAmount),
-                  roundNumber: w.roundNumber,
-                })),
-                superbingo: {
-                  poolAmount: Number(pool.amount),
-                  thresholdBall: pool.thresholdBall,
-                },
-                nextGameId: result.nextGame.id,
-              });
-              await this.gateway.broadcastRoomState(room.id);
-            }
-          }
+          await withTimeout(
+            this.processRoom(room.id, now),
+            BingoEngineService.ROOM_TICK_TIMEOUT_MS,
+            `Room ${room.id} tick`,
+          );
         } catch (roomError) {
           this.logger.warn(`Room ${room.id} tick error: ${(roomError as Error).message}`);
         }
       }
     } finally {
       this.locked = false;
+    }
+  }
+
+  private async processRoom(roomId: string, now: Date): Promise<void> {
+    const game = await this.bingoService.getRoomCurrentGame(roomId);
+
+    if (game.state === BingoGameState.WAITING) {
+      const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt ?? null;
+      const remaining = getPurchaseWindowRemaining(purchaseStartedAt, this.bingoService.purchaseWindowSeconds, now);
+      if (remaining === 0) {
+        const started = await this.bingoService.startGame(game.id);
+        if (started.state === BingoGameState.RUNNING) {
+          await this.gateway.broadcastGameStarted(roomId, started.id);
+        }
+      }
+      return;
+    }
+
+    if (game.state === BingoGameState.RUNNING) {
+      const progress = deriveGameProgress(game, now);
+      if (progress.isFinished) {
+        const result = await this.bingoService.finishGameAutomatically(game.id);
+        const pool = await this.bingoService.getOrCreateSuperbingoForRoom(roomId);
+        await this.gateway.broadcastGameFinished(roomId, {
+          gameId: game.id,
+          resultSummary: result.game.resultSummary ?? {},
+          winners: result.winners.map((w: BingoWinner) => ({
+            playerId: w.playerId,
+            cardId: w.cardId,
+            winType: w.winType,
+            prizeAmount: Number(w.prizeAmount),
+            roundNumber: w.roundNumber,
+          })),
+          superbingo: {
+            poolAmount: Number(pool.amount),
+            thresholdBall: pool.thresholdBall,
+          },
+          nextGameId: result.nextGame.id,
+        });
+        await this.gateway.broadcastRoomState(roomId);
+      }
     }
   }
 }
