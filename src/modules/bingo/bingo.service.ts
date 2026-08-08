@@ -158,6 +158,15 @@ export class BingoService implements OnModuleInit {
             order: { roundNumber: 'DESC' },
           });
 
+          const plannedEndRound = game.persistedSnapshot?.plannedEndRound ?? 90;
+          const currentRound = game.currentRound ?? 0;
+          const shouldAutoFinish = currentRound >= plannedEndRound;
+
+          if (shouldAutoFinish) {
+            await this.finishGameAutomatically(game.id);
+            continue;
+          }
+
           const lastDrawAt = lastRound?.drawnAt ?? game.startAt;
           const lastTime = lastDrawAt ? new Date(lastDrawAt).getTime() : 0;
           if (now.getTime() - lastTime >= 1000) {
@@ -353,7 +362,103 @@ export class BingoService implements OnModuleInit {
     return this.createGame({ roomId, config: {} });
   }
 
-  async startGame(gameId: string): Promise<BingoGame> {
+  private async hasGameActivity(gameId: string): Promise<boolean> {
+    const [cards, tickets, rounds] = await Promise.all([
+      this.cardRepository.find({ where: { gameId } }),
+      this.ticketRepository.find({ where: { gameId } }),
+      this.roundRepository.find({ where: { gameId } }),
+    ]);
+
+    return cards.length > 0 || tickets.length > 0 || rounds.length > 0;
+  }
+
+  async getRoomState(roomId: string): Promise<Record<string, any>> {
+    const game = await this.gameRepository.findOne({
+      where: { roomId, state: BingoGameState.WAITING },
+      order: { createdAt: 'DESC' },
+    }) ?? await this.gameRepository.findOne({
+      where: { roomId, state: BingoGameState.RUNNING },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!game) {
+      const created = await this.createGame({ roomId, config: {} });
+      return { roomId, game: created, status: 'waiting', nextAction: 'start' };
+    }
+
+    const state = game.state === BingoGameState.RUNNING ? 'running' : 'waiting';
+    return { roomId, game, status: state, nextAction: state === 'running' ? 'sync' : 'start' };
+  }
+
+  async prepareNextRound(roomId: string): Promise<Record<string, any>> {
+    const game = await this.gameRepository.findOne({
+      where: { roomId, state: BingoGameState.WAITING },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!game) {
+      const created = await this.createGame({ roomId, config: {} });
+      return { roomId, game: created, status: 'waiting', nextAction: 'start' };
+    }
+
+    return { roomId, game, status: 'waiting', nextAction: 'start' };
+  }
+
+  async refreshNextGame(roomId: string): Promise<Record<string, any>> {
+    const existingWaiting = await this.gameRepository.findOne({
+      where: { roomId, state: BingoGameState.WAITING },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (existingWaiting) {
+      const hasActivity = await this.hasGameActivity(existingWaiting.id);
+      if (hasActivity) {
+        if (!existingWaiting.persistedSnapshot?.purchaseStartedAt) {
+          existingWaiting.persistedSnapshot = {
+            ...existingWaiting.persistedSnapshot,
+            purchaseStartedAt: new Date().toISOString(),
+          };
+          await this.gameRepository.save(existingWaiting);
+        }
+        return {
+          roomId,
+          game: existingWaiting,
+          status: 'waiting',
+          nextAction: 'start',
+          purchaseStartedAt: existingWaiting.persistedSnapshot?.purchaseStartedAt ?? null,
+          ignoredRepeatedCall: true,
+        };
+      }
+    }
+
+    const existingRunning = await this.gameRepository.findOne({
+      where: { roomId, state: BingoGameState.RUNNING },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (existingRunning) {
+      return {
+        roomId,
+        game: existingRunning,
+        status: 'running',
+        nextAction: 'sync',
+        purchaseStartedAt: existingRunning.persistedSnapshot?.purchaseStartedAt ?? null,
+        ignoredRepeatedCall: true,
+      };
+    }
+
+    const created = await this.createGame({ roomId, config: {} });
+    return {
+      roomId,
+      game: created,
+      status: 'waiting',
+      nextAction: 'start',
+      purchaseStartedAt: created.persistedSnapshot?.purchaseStartedAt ?? null,
+      ignoredRepeatedCall: false,
+    };
+  }
+
+  async startGame(gameId: string): Promise<Record<string, any>> {
     const game = await this.getGame(gameId);
     if (game.state !== BingoGameState.WAITING) {
       throw new BadRequestException('Game already started');
@@ -373,11 +478,24 @@ export class BingoService implements OnModuleInit {
     };
 
     await this.prepareGamePlan(game);
-    await this.drawNumber(game.id);
-    return this.getGame(game.id);
+    const firstRound = await this.drawNumber(game.id);
+    const updatedGame = await this.getGame(game.id);
+    const currentBall = firstRound?.drawnNumber ?? updatedGame.persistedSnapshot?.latestDraw ?? null;
+    const pool = updatedGame.superbingoPoolId
+      ? await this.superbingoPoolRepository.findOne({ where: { id: updatedGame.superbingoPoolId } })
+      : null;
+    const superbingo = this.buildSuperbingoState(updatedGame, pool ? Number(pool.amount) : 0, currentBall);
+
+    return {
+      game: updatedGame,
+      startData: {
+        currentBall,
+        superbingo,
+      },
+    };
   }
 
-  async initializeGame(gameId: string, dto: InitializeGameDto): Promise<BingoGame> {
+  async initializeGame(gameId: string, dto: InitializeGameDto): Promise<Record<string, any>> {
     const game = await this.getGame(gameId);
     if (game.state === BingoGameState.FINISHED) {
       throw new BadRequestException('Cannot initialize a finished game');
@@ -425,7 +543,59 @@ export class BingoService implements OnModuleInit {
       superbingoThreshold: dto.superbingoThreshold ?? game.persistedSnapshot?.superbingoThreshold ?? null,
     };
 
-    return this.gameRepository.save(game);
+    const savedGame = await this.gameRepository.save(game);
+    const pool = savedGame.superbingoPoolId
+      ? await this.superbingoPoolRepository.findOne({ where: { id: savedGame.superbingoPoolId } })
+      : null;
+    const currentBall = dto.currentBall ?? dto.drawnNumbers?.[dto.drawnNumbers.length - 1] ?? null;
+    const superbingo = this.buildSuperbingoState(savedGame, pool ? Number(pool.amount) : 0, currentBall);
+
+    return {
+      game: savedGame,
+      startData: {
+        currentBall,
+        superbingo,
+      },
+    };
+  }
+
+  async finishGameAutomatically(gameId: string): Promise<Record<string, any>> {
+    const game = await this.getGame(gameId);
+    if (game.state !== BingoGameState.RUNNING) {
+      return { game, status: 'skipped' };
+    }
+
+    const rounds = await this.roundRepository.find({ where: { gameId }, order: { roundNumber: 'ASC' } });
+    const drawnNumbers = rounds.map((round) => round.drawnNumber);
+    const lastBall = drawnNumbers[drawnNumbers.length - 1] ?? null;
+
+    game.state = BingoGameState.FINISHED;
+    game.endAt = new Date();
+    game.currentRound = rounds.length;
+    game.resultSummary = {
+      ...game.resultSummary,
+      line: game.resultSummary?.line ?? 0,
+      doubleLine: game.resultSummary?.doubleLine ?? 0,
+      bingo: game.resultSummary?.bingo ?? 0,
+      superbingo: game.resultSummary?.superbingo ?? 0,
+    };
+    game.persistedSnapshot = {
+      ...game.persistedSnapshot,
+      state: BingoGameState.FINISHED,
+      latestDraw: lastBall,
+    };
+    await this.gameRepository.save(game);
+
+    await this.cleanupFinishedGameData(game.id);
+    const next = await this.createGame({ roomId: game.roomId, config: {} });
+
+    return {
+      game,
+      nextGame: next,
+      status: 'finished',
+      finalBall: lastBall,
+      nextState: 'waiting',
+    };
   }
 
   async drawNumber(gameId: string): Promise<BingoRound> {
@@ -465,6 +635,69 @@ export class BingoService implements OnModuleInit {
 
     await this.evaluateGameAfterDraw(game, updatedDrawnNumbers);
     return savedRound;
+  }
+
+  async resolveGameResult(gameId: string): Promise<Record<string, any>> {
+    const game = await this.getGame(gameId);
+    const rounds = await this.roundRepository.find({ where: { gameId }, order: { roundNumber: 'ASC' } });
+    const winners = await this.winnerRepository.find({ where: { gameId } });
+
+    const plannedDraws = game.persistedSnapshot?.plannedDraws ?? [];
+    const plannedWinnerEvents = game.persistedSnapshot?.plannedWinnerEvents ?? [];
+
+    if (plannedDraws.length > 0) {
+      for (const round of plannedDraws) {
+        const existing = rounds.some((item) => item.drawnNumber === round);
+        if (!existing) {
+          const createdRound = this.roundRepository.create({ gameId, roundNumber: rounds.length + 1, drawnNumber: round });
+          await this.roundRepository.save(createdRound);
+          rounds.push(createdRound);
+        }
+      }
+    }
+
+    if (plannedWinnerEvents.length > 0) {
+      const existingWinnerIds = new Set(winners.map((winner) => `${winner.playerId}:${winner.cardId}:${winner.winType}`));
+      const pendingWinners = plannedWinnerEvents
+        .filter((event: { playerId: string; cardId: string; winType: string }) => !existingWinnerIds.has(`${event.playerId}:${event.cardId}:${event.winType}`))
+        .map((event: { playerId: string; cardId: string; winType: string; prizeAmount: number }) => this.winnerRepository.create({
+          gameId,
+          playerId: event.playerId,
+          cardId: event.cardId,
+          winType: event.winType as BingoWinType,
+          prizeAmount: event.prizeAmount,
+        }));
+
+      if (pendingWinners.length > 0) {
+        await this.winnerRepository.save(pendingWinners);
+      }
+    }
+
+    game.state = BingoGameState.FINISHED;
+    game.endAt = new Date();
+    game.currentRound = rounds.length;
+    game.resultSummary = {
+      line: game.resultSummary?.line ?? 100,
+      doubleLine: game.resultSummary?.doubleLine ?? 200,
+      bingo: game.resultSummary?.bingo ?? 500,
+      superbingo: game.resultSummary?.superbingo ?? 0,
+    };
+    game.persistedSnapshot = {
+      ...game.persistedSnapshot,
+      state: BingoGameState.FINISHED,
+      latestDraw: rounds[rounds.length - 1]?.drawnNumber ?? null,
+    };
+    await this.gameRepository.save(game);
+
+    return {
+      game,
+      rounds,
+      winners: await this.winnerRepository.find({ where: { gameId } }),
+      prizes: game.persistedSnapshot?.plannedPrizeAmounts ?? null,
+      drawnNumbers: rounds.map((round) => round.drawnNumber),
+      currentBall: rounds[rounds.length - 1]?.drawnNumber ?? null,
+      resultSummary: game.resultSummary,
+    };
   }
 
   async claimWin(gameId: string, cardId: string, claimType: string): Promise<BingoWinner> {
@@ -547,6 +780,25 @@ export class BingoService implements OnModuleInit {
     existingTicket.cardIds = [...(existingTicket.cardIds || []), ...savedCards.map((c) => c.id)];
     await this.ticketRepository.save(existingTicket);
 
+    const pool = game.superbingoPoolId
+      ? await this.superbingoPoolRepository.findOne({ where: { id: game.superbingoPoolId } })
+      : await this.getOrCreateSuperbingoForRoom(game.roomId);
+
+    if (pool) {
+      if (!game.superbingoPoolId) {
+        game.superbingoPoolId = pool.id;
+        await this.gameRepository.save(game);
+      }
+
+      const increment = Math.max(50, quantity * 25);
+      pool.amount = Number(pool.amount) + increment;
+      pool.lastUpdatedAt = new Date();
+      if (!pool.reservedForGameId) {
+        pool.reservedForGameId = game.id;
+      }
+      await this.superbingoPoolRepository.save(pool);
+    }
+
     if (!game.persistedSnapshot?.purchaseStartedAt && savedCards.length > 0) {
       game.persistedSnapshot = {
         ...game.persistedSnapshot,
@@ -585,6 +837,22 @@ export class BingoService implements OnModuleInit {
     }
     await this.ticketRepository.save(tickets);
     await this.cardRepository.delete(invalidCardIds);
+  }
+
+  private buildSuperbingoState(game: BingoGame, poolAmount: number, currentBall: number | null): Record<string, any> {
+    const threshold = game.persistedSnapshot?.superbingoThreshold ?? this.getSuperbingoThreshold();
+    const currentRound = game.currentRound ?? 0;
+    const prize = Number(poolAmount || 0);
+
+    return {
+      threshold,
+      currentRound,
+      currentBall,
+      poolAmount: prize,
+      prize,
+      status: currentRound <= threshold ? 'pending' : 'expired',
+      counterReached: currentRound >= threshold,
+    };
   }
 
   private getGameTiming(game: BingoGame, rounds: BingoRound[]): {
@@ -650,6 +918,13 @@ export class BingoService implements OnModuleInit {
       doubleLine: Math.max(200, totalCards * 20),
       bingo: Math.max(500, totalCards * 50),
     };
+  }
+
+  private calculateSuperbingoPrize(game: BingoGame, poolAmount: number): number {
+    const round = game.currentRound || 0;
+    const basePrize = Number(poolAmount || 0);
+    const multiplier = round > 0 ? Math.min(round, 10) : 1;
+    return Math.max(basePrize, basePrize + multiplier * 100);
   }
 
   private async evaluateGameAfterDraw(game: BingoGame, drawnNumbers: number[]): Promise<void> {
@@ -1016,9 +1291,11 @@ export class BingoService implements OnModuleInit {
 
     const timing = this.getGameTiming(game, rounds);
     const isWaiting = game.state === BingoGameState.WAITING;
-    const roundsResponse = isWaiting ? [] : rounds.map((round) => ({ roundNumber: round.roundNumber, number: round.drawnNumber, drawnAt: round.drawnAt }));
+    const isFinished = game.state === BingoGameState.FINISHED;
     const drawnNumbers = isWaiting ? [] : rounds.map((round) => round.drawnNumber);
     const currentBall = isWaiting ? null : drawnNumbers.length ? drawnNumbers[drawnNumbers.length - 1] : null;
+    const superbingoState = this.buildSuperbingoState(game, superbingoPool ? Number(superbingoPool.amount) : 0, currentBall);
+    const roundsResponse = isWaiting ? [] : rounds.map((round) => ({ roundNumber: round.roundNumber, number: round.drawnNumber, drawnAt: round.drawnAt }));
     const winnersResponse = isWaiting ? [] : winners.map((winner) => ({ id: winner.id, playerId: winner.playerId, cardId: winner.cardId, prizeAmount: winner.prizeAmount, winType: winner.winType }));
     const resultSummary = isWaiting ? {} : game.resultSummary || {};
 
@@ -1035,7 +1312,19 @@ export class BingoService implements OnModuleInit {
         resultSummary,
         persistedSnapshot: game.persistedSnapshot,
         superbingoThreshold: game.persistedSnapshot?.superbingoThreshold ?? null,
-        superbingoValue: isWaiting ? null : game.resultSummary?.superbingo ?? null,
+        superbingo: isWaiting ? {
+          threshold: game.persistedSnapshot?.superbingoThreshold ?? null,
+          currentRound: game.currentRound,
+          currentBall: null,
+          poolAmount: 0,
+          prize: 0,
+          status: 'waiting',
+          counterReached: false,
+        } : {
+          ...superbingoState,
+          prize: game.resultSummary?.superbingo ?? superbingoState.prize,
+        },
+        superbingoValue: isWaiting ? null : game.resultSummary?.superbingo ?? superbingoState.prize,
         elapsedSeconds: timing.elapsedSeconds,
         secondsToNextDraw: timing.secondsToNextDraw,
         nextDrawAt: timing.nextDrawAt,
@@ -1052,6 +1341,20 @@ export class BingoService implements OnModuleInit {
         isWinning: card.isWinning,
       })),
       winners: winnersResponse,
+      finalResult: isFinished ? {
+        state: game.state,
+        rounds: roundsResponse,
+        drawnNumbers,
+        currentBall,
+        winners: winnersResponse,
+        prizes: {
+          ...(game.resultSummary || {}),
+          superbingo: superbingoState.prize,
+        },
+        resultSummary,
+        startedAt: game.startAt,
+        endedAt: game.endAt,
+      } : null,
     };
   }
 

@@ -48,6 +48,21 @@ export class BingoController {
     return this.bingoService.getRoomCurrentGame(id);
   }
 
+  @Get('rooms/:id/state')
+  getRoomState(@Param('id') id: string) {
+    return this.bingoService.getRoomState(id);
+  }
+
+  @Post('rooms/:id/next-round')
+  prepareNextRound(@Param('id') roomId: string) {
+    return this.bingoService.prepareNextRound(roomId);
+  }
+
+  @Post('rooms/:id/refresh-next-game')
+  refreshNextGame(@Param('id') roomId: string) {
+    return this.bingoService.refreshNextGame(roomId);
+  }
+
   @Post('rooms/:id/games')
   createGame(@Param('id') roomId: string, @Body() dto: CreateGameDto) {
     return this.bingoService.createGame({ ...dto, roomId });
