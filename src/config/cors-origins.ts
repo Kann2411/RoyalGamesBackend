@@ -10,6 +10,7 @@ export const ALLOWED_ORIGINS = [
   'https://royalgames.lat',
   'https://minasroyal.s3.us-east-2.amazonaws.com',
   'https://baazaar.s3.us-east-2.amazonaws.com',
+  'https://bingoroyal.s3.us-east-2.amazonaws.com',
 ];
 
 export function isOriginAllowed(origin: string | undefined | null): boolean {
