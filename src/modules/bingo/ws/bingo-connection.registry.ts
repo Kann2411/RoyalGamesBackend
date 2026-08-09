@@ -41,6 +41,22 @@ export class BingoConnectionRegistry {
     return this.roomSockets.get(roomId)?.size ?? 0;
   }
 
+  /** Distinct players currently connected to a room (one player can have >1 socket open). */
+  getRoomPlayerIds(roomId: string): string[] {
+    const sockets = this.roomSockets.get(roomId);
+    if (!sockets) {
+      return [];
+    }
+    const ids = new Set<string>();
+    for (const socket of sockets) {
+      const meta = this.socketMeta.get(socket);
+      if (meta) {
+        ids.add(meta.playerId);
+      }
+    }
+    return Array.from(ids);
+  }
+
   sendTo(client: WebSocket, envelope: WsEnvelope): void {
     if (client.readyState === client.OPEN) {
       client.send(JSON.stringify(envelope));

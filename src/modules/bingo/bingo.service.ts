@@ -115,6 +115,13 @@ export class BingoService {
     return player;
   }
 
+  async getPlayersByIds(ids: string[]): Promise<BingoPlayer[]> {
+    if (ids.length === 0) {
+      return [];
+    }
+    return this.playerRepository.find({ where: { id: In(ids) } });
+  }
+
   async updatePlayer(id: string, partial: Partial<BingoPlayer>): Promise<BingoPlayer> {
     const player = await this.getPlayer(id);
     Object.assign(player, partial);

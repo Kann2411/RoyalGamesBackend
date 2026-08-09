@@ -73,10 +73,19 @@ export interface GameSnapshotPayload {
   superbingo: SuperbingoSummary;
 }
 
+/** Who is actually sitting in the room right now (socket connected), independent of whether
+ *  they've bought any cards yet - drives the room's avatar row. */
+export interface PresenceEntry {
+  playerId: string;
+  userId: string | null;
+  displayName: string;
+}
+
 export interface RoomStatePayload {
   serverTime: string;
   room: { id: string; name: string; betAmount: number; maxPlayers: number };
   game: GameSnapshotPayload;
+  presence: PresenceEntry[];
 }
 
 export interface GameFinishedPayload {

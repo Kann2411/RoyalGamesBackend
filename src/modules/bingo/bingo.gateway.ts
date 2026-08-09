@@ -5,7 +5,7 @@ import type WebSocket from 'ws';
 import { BingoService } from './bingo.service';
 import { BingoConnectionRegistry } from './ws/bingo-connection.registry';
 import { isOriginAllowed } from '../../config/cors-origins';
-import { BuyCardsMessage, RoomStatePayload, UpdateMarksMessage, WsEnvelope } from './ws/ws-message.types';
+import { BuyCardsMessage, PresenceEntry, RoomStatePayload, UpdateMarksMessage, WsEnvelope } from './ws/ws-message.types';
 
 @WebSocketGateway({ path: '/bingo/ws' })
 export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -39,7 +39,9 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.on('message', (raw: WebSocket.RawData) => this.handleMessage(client, raw));
       client.on('error', (err) => this.logger.warn(`Socket error for player ${playerId}: ${err.message}`));
 
-      await this.sendRoomState(client, roomId);
+      // Broadcasting (not just sending to the new client) is what makes the room's avatar row
+      // live: everyone already in the room needs to see this new arrival too.
+      await this.broadcastRoomState(roomId);
     } catch (error) {
       this.logger.warn(`Rejected connection: ${(error as Error).message}`);
       client.close(4004, 'Unable to join room');
@@ -47,7 +49,13 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   handleDisconnect(client: WebSocket): void {
+    const meta = this.registry.getMeta(client);
     this.registry.unregister(client);
+    if (meta) {
+      this.broadcastRoomState(meta.roomId).catch((err) =>
+        this.logger.warn(`Failed to broadcast presence after disconnect: ${(err as Error).message}`),
+      );
+    }
   }
 
   private async handleMessage(client: WebSocket, raw: WebSocket.RawData): Promise<void> {
@@ -98,11 +106,6 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     await this.bingoService.updateCardMarks(payload.gameId, payload.cardId, { marks: payload.marks });
   }
 
-  async sendRoomState(client: WebSocket, roomId: string): Promise<void> {
-    const payload = await this.buildRoomStatePayload(roomId);
-    this.registry.sendTo(client, { type: 'room_state', payload });
-  }
-
   async broadcastRoomState(roomId: string): Promise<void> {
     const payload = await this.buildRoomStatePayload(roomId);
     this.registry.broadcastToRoom(roomId, { type: 'room_state', payload });
@@ -124,12 +127,27 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = await this.bingoService.getRoom(roomId);
     const game = await this.bingoService.getRoomCurrentGame(roomId);
     const gameSnapshot = await this.bingoService.buildGameSnapshot(game);
+    const presence = await this.buildPresence(roomId);
 
     return {
       serverTime: new Date().toISOString(),
       room: { id: room.id, name: room.name, betAmount: Number(room.betAmount), maxPlayers: room.maxPlayers },
       game: gameSnapshot,
+      presence,
     };
+  }
+
+  private async buildPresence(roomId: string): Promise<PresenceEntry[]> {
+    const playerIds = this.registry.getRoomPlayerIds(roomId);
+    if (playerIds.length === 0) {
+      return [];
+    }
+    const players = await this.bingoService.getPlayersByIds(playerIds);
+    return players.map((player) => ({
+      playerId: player.id,
+      userId: player.userId,
+      displayName: player.displayName ?? player.username,
+    }));
   }
 
   private sendError(client: WebSocket, code: string, message: string): void {
