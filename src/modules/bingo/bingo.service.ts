@@ -578,9 +578,15 @@ export class BingoService {
         throw new NotFoundException('Room not found');
       }
 
-      const existingTicket = await manager.findOne(BingoTicket, { where: { gameId, playerId } });
+      // Auto-join: games cycle continuously (a new WAITING game is created every time one
+      // finishes), and a player connected to the room has no explicit "join" step for each new
+      // one - buying a card already implies joining, so create the ticket here if it's missing
+      // instead of rejecting the purchase.
+      let existingTicket = await manager.findOne(BingoTicket, { where: { gameId, playerId } });
       if (!existingTicket) {
-        throw new NotFoundException('Player has not joined the game');
+        existingTicket = await manager.save(
+          manager.create(BingoTicket, { gameId, playerId, cardIds: [], cost: 0 }),
+        );
       }
 
       const quantity = dto.quantity ?? 1;
@@ -708,6 +714,48 @@ export class BingoService {
   }
 
   /**
+   * Splits a card's 15 (sorted) numbers into the 3 rows the PLAYER actually sees on screen.
+   * Mirrors CartonManager.BuildCardNumbers()/GetBestRow() on the Unity client exactly: bucket by
+   * column (ranges of 10: 1-10, 11-20, ..., 81-90), then greedily assign each number to
+   * whichever row currently has the fewest numbers (ties favor the lowest row index). Card
+   * generation (generateStructuredCardNumbers) guarantees no column has more than 3 numbers, so
+   * this always converges to exactly 5-5-5, the same result the client's rendering produces.
+   *
+   * Line/double-line detection MUST use this, not an arbitrary slice of the sorted array
+   * (numbers[0:5]/[5:10]/[10:15]) - that grouping has nothing to do with which row a number is
+   * drawn in, so a row that's visually complete on screen could go completely unrecognized (or a
+   * "line" could fire for numbers scattered across different visual rows).
+   */
+  private computeVisualRows(numbers: number[]): number[][] {
+    const columns: number[][] = Array.from({ length: 9 }, () => []);
+    for (const n of numbers) {
+      const columnIndex = n === 90 ? 8 : Math.floor((n - 1) / 10);
+      columns[columnIndex].push(n);
+    }
+    for (const column of columns) {
+      column.sort((a, b) => a - b);
+    }
+
+    const rows: number[][] = [[], [], []];
+    const rowCounts = [0, 0, 0];
+    for (const column of columns) {
+      for (const number of column) {
+        let bestRow = 0;
+        let bestCount = Infinity;
+        for (let r = 0; r < 3; r++) {
+          if (rowCounts[r] < 5 && rowCounts[r] < bestCount) {
+            bestRow = r;
+            bestCount = rowCounts[r];
+          }
+        }
+        rows[bestRow].push(number);
+        rowCounts[bestRow]++;
+      }
+    }
+    return rows;
+  }
+
+  /**
    * Computes, purely from the (already random) draw order, exactly which round each card
    * completes a line / double line / bingo. The game ends at the EARLIEST bingo round across all
    * cards (`plannedEndRound`); only that round's bingo(s) actually happen, so any card whose own
@@ -726,7 +774,7 @@ export class BingoService {
     const prizeAmounts = this.calculatePrizeAmounts(cards.length);
 
     const perCard = cards.map((card) => {
-      const rows = [card.numbers.slice(0, 5), card.numbers.slice(5, 10), card.numbers.slice(10, 15)];
+      const rows = this.computeVisualRows(card.numbers);
       const rowRounds = rows.map((row) => Math.max(...row.map((num) => drawPosition.get(num) ?? 90)));
       const sortedRowRounds = [...rowRounds].sort((a, b) => a - b);
       return {

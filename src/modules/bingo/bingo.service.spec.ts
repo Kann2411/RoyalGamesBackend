@@ -88,6 +88,36 @@ describe('BingoService', () => {
     });
   });
 
+  describe('computeVisualRows (private)', () => {
+    it('agrees with the client-side reconstruction: a fully-drawn visual row is recognized as a line', () => {
+      const { service } = buildService();
+
+      // Run many real generated cards through the full pipeline: draw every number in order,
+      // find whichever row completes first *visually* (computeVisualRows), and confirm
+      // planWinnerEvents reports a LINE event at exactly that round - i.e. the server's notion of
+      // "line" matches what the player actually sees fill up on screen.
+      for (let i = 0; i < 50; i++) {
+        const numbers: number[] = (service as any).generateUniqueCardNumbers(new Set<string>());
+        const card = { id: 'card-1', ownerId: 'player-1', numbers };
+        const plannedDraws = Array.from({ length: 90 }, (_, idx) => idx + 1); // ball order = numeric order, simplest to reason about
+        const drawPosition = new Map<number, number>(plannedDraws.map((v, idx) => [v, idx + 1]));
+
+        const visualRows: number[][] = (service as any).computeVisualRows(numbers);
+        expect(visualRows.every((row) => row.length === 5)).toBe(true);
+
+        const expectedLineRound = Math.min(
+          ...visualRows.map((row) => Math.max(...row.map((n) => drawPosition.get(n)!))),
+        );
+
+        const { plannedWinnerEvents } = (service as any).planWinnerEvents([card], plannedDraws, 50, 0);
+        const lineEvent = plannedWinnerEvents.find((e: any) => e.winType === BingoWinType.LINE);
+
+        expect(lineEvent).toBeDefined();
+        expect(lineEvent.roundNumber).toBe(expectedLineRound);
+      }
+    });
+  });
+
   describe('planWinnerEvents (private)', () => {
     it('only awards bingo to the card(s) that hit it first; later cards get no bingo/superbingo event', () => {
       const { service } = buildService();
