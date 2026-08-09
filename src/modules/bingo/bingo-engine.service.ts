@@ -1,7 +1,6 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { BingoService } from './bingo.service';
 import { BingoGateway } from './bingo.gateway';
-import { BingoConnectionRegistry } from './ws/bingo-connection.registry';
 import { BingoGameState } from './entities/bingo-game.entity';
 import { BingoWinner } from './entities/bingo-winner.entity';
 import { deriveGameProgress, getPurchaseWindowRemaining } from './bingo-time.util';
@@ -38,7 +37,6 @@ export class BingoEngineService implements OnModuleInit {
   constructor(
     private readonly bingoService: BingoService,
     private readonly gateway: BingoGateway,
-    private readonly registry: BingoConnectionRegistry,
   ) {}
 
   async onModuleInit(): Promise<void> {
@@ -68,14 +66,11 @@ export class BingoEngineService implements OnModuleInit {
       const now = new Date();
 
       for (const room of rooms) {
-        // Rooms nobody is currently connected to don't need to be pushed forward: state is
-        // derived from time, not from how often this loop ticks, so it's always correct whenever
-        // someone reconnects - and that reconnect itself wakes this room back up on the next tick.
-        // This keeps the 9 default (mostly empty) rooms from hammering the DB every few seconds.
-        if (this.registry.getRoomConnectionCount(room.id) === 0) {
-          continue;
-        }
-
+        // Deliberately NOT gated on "is anyone connected right now": that used an in-memory
+        // connection count that can desync from reality (a room with real purchases and an
+        // expired countdown got silently skipped forever). A handful of cheap SELECTs per room
+        // every 3s is fine - `processRoom` itself already no-ops immediately for rooms with no
+        // purchase in progress, so idle rooms cost almost nothing anyway.
         try {
           await withTimeout(
             this.processRoom(room.id, now),
