@@ -326,6 +326,21 @@ export class BingoService {
     return this.createGame({ roomId, config: {} });
   }
 
+  /**
+   * Starts a WAITING game's purchase-window countdown the moment someone is actually present to
+   * see it (a player connecting to the room), not only once a card is bought - an empty room with
+   * nobody watching has no reason to be counting down. No-ops if it's already started (first
+   * arrival wins) or if the game isn't WAITING.
+   */
+  async ensurePurchaseWindowStarted(gameId: string): Promise<void> {
+    const game = await this.gameRepository.findOne({ where: { id: gameId, state: BingoGameState.WAITING } });
+    if (!game || game.persistedSnapshot?.purchaseStartedAt) {
+      return;
+    }
+    game.persistedSnapshot = { ...game.persistedSnapshot, purchaseStartedAt: new Date().toISOString() };
+    await this.gameRepository.save(game);
+  }
+
   private async hasGameActivity(gameId: string): Promise<boolean> {
     const [cards, tickets, rounds] = await Promise.all([
       this.cardRepository.count({ where: { gameId } }),
@@ -764,11 +779,13 @@ export class BingoService {
 
   /**
    * Computes, purely from the (already random) draw order, exactly which round each card
-   * completes a line / double line / bingo. The game ends at the EARLIEST bingo round across all
-   * cards (`plannedEndRound`); only that round's bingo(s) actually happen, so any card whose own
-   * bingo would land later never gets that event (fixes a bug in the original implementation,
-   * which awarded bingo/superbingo to every card regardless of whether the game was still running
-   * by the time they'd have completed it).
+   * completes a line / double line / bingo. Every prize type is awarded to whichever card(s)
+   * reach it FIRST across the WHOLE GAME, not once per card - a card that completes its own line
+   * two rounds after another card already claimed the line prize does not get a second payout for
+   * the same line. (Bingo/superbingo already worked this way; line/double-line did not - every
+   * card that ever completed a line got its own separate line prize, which is also what let stale
+   * winner labels keep changing after the "real" line was already won.) The game itself still ends
+   * at the EARLIEST bingo round across all cards (`plannedEndRound`).
    */
   private planWinnerEvents(
     cards: BingoCard[],
@@ -793,10 +810,12 @@ export class BingoService {
     });
 
     const plannedEndRound = Math.min(90, ...perCard.map((c) => c.bingoRound));
+    const globalLineRound = Math.min(...perCard.map((c) => c.lineRound));
+    const globalDoubleLineRound = Math.min(...perCard.map((c) => c.doubleLineRound));
     const plannedWinnerEvents: PlannedWinnerEvent[] = [];
 
     for (const { card, lineRound, doubleLineRound, bingoRound } of perCard) {
-      if (lineRound <= plannedEndRound) {
+      if (lineRound === globalLineRound && lineRound <= plannedEndRound) {
         plannedWinnerEvents.push({
           playerId: card.ownerId,
           cardId: card.id,
@@ -806,7 +825,7 @@ export class BingoService {
         });
       }
 
-      if (doubleLineRound <= plannedEndRound) {
+      if (doubleLineRound === globalDoubleLineRound && doubleLineRound <= plannedEndRound) {
         plannedWinnerEvents.push({
           playerId: card.ownerId,
           cardId: card.id,

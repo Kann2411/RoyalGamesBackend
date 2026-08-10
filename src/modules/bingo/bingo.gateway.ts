@@ -39,6 +39,11 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       client.on('message', (raw: WebSocket.RawData) => this.handleMessage(client, raw));
       client.on('error', (err) => this.logger.warn(`Socket error for player ${playerId}: ${err.message}`));
 
+      // Someone showing up to an empty, untouched WAITING game is what starts its countdown -
+      // not the first purchase. No-ops if it's already counting down or the game isn't WAITING.
+      const currentGame = await this.bingoService.getRoomCurrentGame(roomId);
+      await this.bingoService.ensurePurchaseWindowStarted(currentGame.id);
+
       // Broadcasting (not just sending to the new client) is what makes the room's avatar row
       // live: everyone already in the room needs to see this new arrival too.
       await this.broadcastRoomState(roomId);
@@ -109,6 +114,17 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   async broadcastRoomState(roomId: string): Promise<void> {
     const payload = await this.buildRoomStatePayload(roomId);
     this.registry.broadcastToRoom(roomId, { type: 'room_state', payload });
+  }
+
+  /**
+   * Called right after a fresh WAITING game is created for a room (typically once the previous
+   * one just finished). If players stuck around through the transition instead of disconnecting,
+   * there's no new "connection" event to start the next countdown - this does it instead.
+   */
+  async ensureTimerIfRoomOccupied(roomId: string, gameId: string): Promise<void> {
+    if (this.registry.getRoomConnectionCount(roomId) > 0) {
+      await this.bingoService.ensurePurchaseWindowStarted(gameId);
+    }
   }
 
   /** Broadcast once, at the exact moment a game transitions waiting -> running, with the full plan. */

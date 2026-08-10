@@ -146,6 +146,26 @@ describe('BingoService', () => {
       expect(plannedWinnerEvents.every((e: any) => e.cardId !== 'card-b' || e.roundNumber <= plannedEndRound)).toBe(true);
     });
 
+    it('awards the line/double-line prize only to whichever card gets there first, not to every card that eventually completes one', () => {
+      const { service } = buildService();
+      const plannedDraws = Array.from({ length: 90 }, (_, i) => i + 1);
+      // Card A's numbers are all low (1-15): its first visual row fills in very early.
+      const cardA = { id: 'card-a', ownerId: 'player-a', numbers: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15] };
+      // Card B's numbers are all high (76-90): its first row completes much later, well after
+      // card A already claimed the line - it must NOT get its own line payout too.
+      const cardB = { id: 'card-b', ownerId: 'player-b', numbers: [76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90] };
+
+      const { plannedWinnerEvents } = (service as any).planWinnerEvents([cardA, cardB], plannedDraws, 90, 1000);
+
+      const lineEvents = plannedWinnerEvents.filter((e: any) => e.winType === BingoWinType.LINE);
+      expect(lineEvents).toHaveLength(1);
+      expect(lineEvents[0].cardId).toBe('card-a');
+
+      const doubleLineEvents = plannedWinnerEvents.filter((e: any) => e.winType === BingoWinType.DOUBLE_LINE);
+      expect(doubleLineEvents).toHaveLength(1);
+      expect(doubleLineEvents[0].cardId).toBe('card-a');
+    });
+
     it('does not award superbingo when the winning round is after the threshold ball', () => {
       const { service } = buildService();
       const plannedDraws = Array.from({ length: 90 }, (_, i) => i + 1);

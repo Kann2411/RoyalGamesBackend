@@ -122,6 +122,7 @@ export class BingoEngineService implements OnModuleInit {
           },
           nextGameId: result.nextGame.id,
         });
+        await this.gateway.ensureTimerIfRoomOccupied(roomId, result.nextGame.id);
         await this.gateway.broadcastRoomState(roomId);
       }
     }
