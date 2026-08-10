@@ -93,9 +93,16 @@ export class BingoEngineService implements OnModuleInit {
       const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt ?? null;
       const remaining = getPurchaseWindowRemaining(purchaseStartedAt, this.bingoService.purchaseWindowSeconds, now);
       if (remaining === 0) {
-        const started = await this.bingoService.startGame(game.id);
-        if (started.state === BingoGameState.RUNNING) {
-          await this.gateway.broadcastGameStarted(roomId, started.id);
+        const cardsCount = await this.bingoService.countCardsForGame(game.id);
+        if (cardsCount === 0) {
+          // Nothing to start - loop the countdown instead of leaving it stuck at 0 forever.
+          await this.bingoService.restartPurchaseWindow(game.id);
+          await this.gateway.broadcastRoomState(roomId);
+        } else {
+          const started = await this.bingoService.startGame(game.id);
+          if (started.state === BingoGameState.RUNNING) {
+            await this.gateway.broadcastGameStarted(roomId, started.id);
+          }
         }
       }
       return;

@@ -163,16 +163,20 @@ export class BingoService {
   }
 
   async ensureDefaultRooms(): Promise<BingoRoom[]> {
+    // superbingoBaseAmount: the pool's floor value for this room, restored every time the pool
+    // resets after being awarded. Scaled to the room's stakes (30x the card price) so a 10-chip
+    // room and a 250000-chip room don't share the same base pot.
+    const withSuperbingoBase = (betAmount: number) => ({ mode: 'classic', chipsRequired: betAmount, superbingoBaseAmount: betAmount * 30 });
     const defaultRooms = [
-      { name: 'Sala 250000', type: BingoRoomType.PUBLIC, betAmount: 250000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 250000 } },
-      { name: 'Sala 100000', type: BingoRoomType.PUBLIC, betAmount: 100000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 100000 } },
-      { name: 'Sala 50000', type: BingoRoomType.PUBLIC, betAmount: 50000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 50000 } },
-      { name: 'Sala 10000', type: BingoRoomType.PUBLIC, betAmount: 10000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 10000 } },
-      { name: 'Sala 5000', type: BingoRoomType.PUBLIC, betAmount: 5000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 5000 } },
-      { name: 'Sala 1000', type: BingoRoomType.PUBLIC, betAmount: 1000, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 1000 } },
-      { name: 'Sala 100', type: BingoRoomType.PUBLIC, betAmount: 100, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 100 } },
-      { name: 'Sala 25', type: BingoRoomType.PUBLIC, betAmount: 25, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 25 } },
-      { name: 'Sala 10', type: BingoRoomType.PUBLIC, betAmount: 10, maxPlayers: 8, config: { mode: 'classic', chipsRequired: 10 } },
+      { name: 'Sala 250000', type: BingoRoomType.PUBLIC, betAmount: 250000, maxPlayers: 8, config: withSuperbingoBase(250000) },
+      { name: 'Sala 100000', type: BingoRoomType.PUBLIC, betAmount: 100000, maxPlayers: 8, config: withSuperbingoBase(100000) },
+      { name: 'Sala 50000', type: BingoRoomType.PUBLIC, betAmount: 50000, maxPlayers: 8, config: withSuperbingoBase(50000) },
+      { name: 'Sala 10000', type: BingoRoomType.PUBLIC, betAmount: 10000, maxPlayers: 8, config: withSuperbingoBase(10000) },
+      { name: 'Sala 5000', type: BingoRoomType.PUBLIC, betAmount: 5000, maxPlayers: 8, config: withSuperbingoBase(5000) },
+      { name: 'Sala 1000', type: BingoRoomType.PUBLIC, betAmount: 1000, maxPlayers: 8, config: withSuperbingoBase(1000) },
+      { name: 'Sala 100', type: BingoRoomType.PUBLIC, betAmount: 100, maxPlayers: 8, config: withSuperbingoBase(100) },
+      { name: 'Sala 25', type: BingoRoomType.PUBLIC, betAmount: 25, maxPlayers: 8, config: withSuperbingoBase(25) },
+      { name: 'Sala 10', type: BingoRoomType.PUBLIC, betAmount: 10, maxPlayers: 8, config: withSuperbingoBase(10) },
     ];
 
     const created: BingoRoom[] = [];
@@ -335,6 +339,25 @@ export class BingoService {
   async ensurePurchaseWindowStarted(gameId: string): Promise<void> {
     const game = await this.gameRepository.findOne({ where: { id: gameId, state: BingoGameState.WAITING } });
     if (!game || game.persistedSnapshot?.purchaseStartedAt) {
+      return;
+    }
+    game.persistedSnapshot = { ...game.persistedSnapshot, purchaseStartedAt: new Date().toISOString() };
+    await this.gameRepository.save(game);
+  }
+
+  async countCardsForGame(gameId: string): Promise<number> {
+    return this.cardRepository.count({ where: { gameId } });
+  }
+
+  /**
+   * The countdown reached zero but nobody bought a card - there's nothing to start. Loops the
+   * countdown back to a fresh 10s instead of leaving it stuck at 0 forever (which is what
+   * happened before: the engine kept calling startGame(), which kept throwing "no cards", every
+   * tick, forever).
+   */
+  async restartPurchaseWindow(gameId: string): Promise<void> {
+    const game = await this.gameRepository.findOne({ where: { id: gameId, state: BingoGameState.WAITING } });
+    if (!game) {
       return;
     }
     game.persistedSnapshot = { ...game.persistedSnapshot, purchaseStartedAt: new Date().toISOString() };
@@ -518,8 +541,7 @@ export class BingoService {
       }
 
       const superbingoWinner = winners.find((w) => w.winType === BingoWinType.SUPERBINGO);
-      const cardsSold = await manager.count(BingoCard, { where: { gameId } });
-      await this.finalizeSuperbingoPool(manager, game, !!superbingoWinner, cardsSold);
+      await this.finalizeSuperbingoPool(manager, game, !!superbingoWinner);
 
       game.resultSummary = {
         ...game.persistedSnapshot?.plannedPrizeAmounts,
@@ -665,6 +687,18 @@ export class BingoService {
       existingTicket.cardIds = [...(existingTicket.cardIds || []), ...savedCards.map((c) => c.id)];
       existingTicket.cost = Number(existingTicket.cost) + totalCost;
       await manager.save(existingTicket);
+
+      // The superbingo pool grows in real time as people buy, on top of its room-specific base
+      // value (e.g. base 30000, buy a 1000-chip card -> pool becomes 30100 = +10% of the cost).
+      if (totalCost > 0) {
+        const pool = await this.getOrCreateSuperbingoForRoom(game.roomId, manager);
+        pool.amount = Number(pool.amount) + Math.round(totalCost * 0.1);
+        pool.lastUpdatedAt = new Date();
+        if (!game.superbingoPoolId) {
+          game.superbingoPoolId = pool.id;
+        }
+        await manager.save(pool);
+      }
 
       if (!game.persistedSnapshot?.purchaseStartedAt) {
         game.persistedSnapshot = {
@@ -1121,7 +1155,10 @@ export class BingoService {
     }
 
     try {
-      pool = repo.create({ roomId, amount: 0, lastUpdatedAt: new Date() });
+      const roomRepo = manager ? manager.getRepository(BingoRoom) : this.roomRepository;
+      const room = await roomRepo.findOne({ where: { id: roomId } });
+      const baseAmount = Number(room?.config?.superbingoBaseAmount ?? 0);
+      pool = repo.create({ roomId, amount: baseAmount, resetBaseAmount: baseAmount, lastUpdatedAt: new Date() });
       return await repo.save(pool);
     } catch (err) {
       // Same concurrent-creation race as BingoService.createGame: the DB-level unique index
@@ -1163,14 +1200,15 @@ export class BingoService {
   }
 
   /**
-   * Rolls the room's superbingo pool at the end of a game: grows it (pool amount by cards sold,
-   * threshold ball by +1) if nobody hit superbingo, or resets both to their base values if someone did.
+   * Rolls the room's superbingo pool at the end of a game. The pool AMOUNT already grew in real
+   * time as cards were bought (see purchaseCardTransaction) - this only handles the threshold
+   * ball (+1 per game nobody hits superbingo) and the full reset (both back to the room's base
+   * values) when someone does.
    */
   private async finalizeSuperbingoPool(
     manager: EntityManager,
     game: BingoGame,
     hadSuperbingoWinner: boolean,
-    cardsSold: number,
   ): Promise<void> {
     if (!game.superbingoPoolId) {
       return;
@@ -1188,7 +1226,6 @@ export class BingoService {
       pool.amount = pool.resetBaseAmount;
       pool.thresholdBall = SUPERBINGO_BASE_THRESHOLD;
     } else {
-      pool.amount = Number(pool.amount) + Math.max(50, cardsSold * 25);
       pool.thresholdBall = Math.min(90, pool.thresholdBall + 1);
     }
     pool.reservedForGameId = null;
