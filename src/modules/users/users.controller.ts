@@ -72,9 +72,12 @@ export class UsersController {
   }
 
   @Get('user-email')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by email' })
   @ApiQuery({ name: 'email', description: 'User email' })
   @ApiResponse({ status: 200, description: 'User retrieved successfully' })
+  @ApiResponse({ status: 401, description: 'Invalid or expired token' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async getUserByEmail(@Query('email') email: string) {
     return this.usersService.getUserByEmail(email);
