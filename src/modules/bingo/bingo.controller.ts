@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { BingoService } from './bingo.service';
+import { BingoConnectionRegistry } from './ws/bingo-connection.registry';
 import { CreatePlayerDto } from './dtos/create-player.dto';
 import { CreateRoomDto } from './dtos/create-room.dto';
 import { CreateGameDto } from './dtos/create-game.dto';
@@ -8,7 +9,10 @@ import { UpdateCardMarksDto } from './dtos/update-card-marks.dto';
 
 @Controller('bingo')
 export class BingoController {
-  constructor(private readonly bingoService: BingoService) {}
+  constructor(
+    private readonly bingoService: BingoService,
+    private readonly registry: BingoConnectionRegistry,
+  ) {}
 
   @Post('players')
   createPlayer(@Body() dto: CreatePlayerDto) {
@@ -28,7 +32,13 @@ export class BingoController {
   @Get('rooms')
   async getRooms() {
     await this.bingoService.ensureDefaultRooms();
-    return this.bingoService.getRooms();
+    const rooms = await this.bingoService.getRooms();
+    // connectedCount: live WebSocket presence (see BingoConnectionRegistry), not "who bought
+    // cards" - lets the lobby show "24/100" per room before anyone has even joined a game.
+    return rooms.map((room) => ({
+      ...room,
+      connectedCount: this.registry.getRoomConnectionCount(room.id),
+    }));
   }
 
   @Post('rooms')
