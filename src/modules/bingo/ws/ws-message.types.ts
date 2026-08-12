@@ -88,6 +88,8 @@ export interface PresenceEntry {
   role: string | null;
   /** Has at least one card in the room's CURRENT game - "jugando" vs. just sitting in the room. */
   isPlaying: boolean;
+  /** Real wallet balance (User.chips) - 0 when the player has no linked site account. */
+  chips: number;
 }
 
 export interface ChatMessageEntry {
