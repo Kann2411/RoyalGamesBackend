@@ -13,10 +13,12 @@ function buildService(dataSourceOverrides: any = {}) {
     pool: { findOne: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v) },
     winner: { find: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v), delete: jest.fn() },
     audit: { create: jest.fn((v: any) => v), save: jest.fn() },
+    chat: { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v) },
   };
 
   const dataSource = {
     transaction: jest.fn(async (cb: (manager: any) => Promise<any>) => cb(dataSourceOverrides.manager)),
+    getRepository: jest.fn(() => ({ findOne: jest.fn().mockResolvedValue(null) })),
   };
 
   const service = new BingoService(
@@ -29,6 +31,7 @@ function buildService(dataSourceOverrides: any = {}) {
     repos.pool as any,
     repos.winner as any,
     repos.audit as any,
+    repos.chat as any,
     dataSource as any,
   );
 

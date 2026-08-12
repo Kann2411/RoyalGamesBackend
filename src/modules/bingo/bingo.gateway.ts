@@ -5,7 +5,14 @@ import type WebSocket from 'ws';
 import { BingoService } from './bingo.service';
 import { BingoConnectionRegistry } from './ws/bingo-connection.registry';
 import { isOriginAllowed } from '../../config/cors-origins';
-import { BuyCardsMessage, PresenceEntry, RoomStatePayload, UpdateMarksMessage, WsEnvelope } from './ws/ws-message.types';
+import {
+  BuyCardsMessage,
+  ChatSendMessage,
+  PresenceEntry,
+  RoomStatePayload,
+  UpdateMarksMessage,
+  WsEnvelope,
+} from './ws/ws-message.types';
 
 @WebSocketGateway({ path: '/bingo/ws' })
 export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
@@ -85,6 +92,9 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         case 'update_marks':
           await this.handleUpdateMarks(client, meta.roomId, envelope.payload as UpdateMarksMessage);
           break;
+        case 'chat_send':
+          await this.handleChatSend(meta.roomId, meta.playerId, envelope.payload as ChatSendMessage);
+          break;
         case 'ping':
           this.registry.sendTo(client, { type: 'pong', payload: { serverTime: new Date().toISOString() } });
           break;
@@ -109,6 +119,11 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private async handleUpdateMarks(client: WebSocket, roomId: string, payload: UpdateMarksMessage): Promise<void> {
     await this.bingoService.updateCardMarks(payload.gameId, payload.cardId, { marks: payload.marks });
+  }
+
+  private async handleChatSend(roomId: string, playerId: string, payload: ChatSendMessage): Promise<void> {
+    const entry = await this.bingoService.sendChatMessage(roomId, playerId, payload?.message ?? '');
+    this.registry.broadcastToRoom(roomId, { type: 'chat_message', payload: entry });
   }
 
   async broadcastRoomState(roomId: string): Promise<void> {
@@ -143,26 +158,38 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     const room = await this.bingoService.getRoom(roomId);
     const game = await this.bingoService.getRoomCurrentGame(roomId);
     const gameSnapshot = await this.bingoService.buildGameSnapshot(game);
-    const presence = await this.buildPresence(roomId);
+    const [presence, chatHistory] = await Promise.all([
+      this.buildPresence(roomId, game.id),
+      this.bingoService.getChatHistory(roomId),
+    ]);
 
     return {
       serverTime: new Date().toISOString(),
       room: { id: room.id, name: room.name, betAmount: Number(room.betAmount), maxPlayers: room.maxPlayers },
       game: gameSnapshot,
       presence,
+      chatHistory,
     };
   }
 
-  private async buildPresence(roomId: string): Promise<PresenceEntry[]> {
+  private async buildPresence(roomId: string, currentGameId: string): Promise<PresenceEntry[]> {
     const playerIds = this.registry.getRoomPlayerIds(roomId);
     if (playerIds.length === 0) {
       return [];
     }
-    const players = await this.bingoService.getPlayersByIds(playerIds);
+    const [players, playingIds] = await Promise.all([
+      this.bingoService.getPlayersByIds(playerIds),
+      this.bingoService.getCardOwnerIds(currentGameId),
+    ]);
+    const playingSet = new Set(playingIds);
+
     return players.map((player) => ({
       playerId: player.id,
       userId: player.userId,
       displayName: player.displayName ?? player.username,
+      level: player.level,
+      role: player.user?.role ?? null,
+      isPlaying: playingSet.has(player.id),
     }));
   }
 

@@ -16,6 +16,7 @@ import { BingoRound } from './entities/bingo-round.entity';
 import { BingoSuperBingoPool } from './entities/bingo-super-bingo-pool.entity';
 import { BingoWinner, BingoWinType } from './entities/bingo-winner.entity';
 import { BingoAudit } from './entities/bingo-audit.entity';
+import { BingoChatMessage, BingoChatMessageType } from './entities/bingo-chat-message.entity';
 import { User } from '../users/entities/user.entity';
 import { CreatePlayerDto } from './dtos/create-player.dto';
 import { CreateRoomDto } from './dtos/create-room.dto';
@@ -32,6 +33,7 @@ import {
   CardSummary,
   PlayerSummary,
   WinnerSummary,
+  ChatMessageEntry,
 } from './ws/ws-message.types';
 
 interface PlannedWinnerEvent {
@@ -66,9 +68,14 @@ export class BingoService {
     private readonly winnerRepository: Repository<BingoWinner>,
     @InjectRepository(BingoAudit)
     private readonly auditRepository: Repository<BingoAudit>,
+    @InjectRepository(BingoChatMessage)
+    private readonly chatMessageRepository: Repository<BingoChatMessage>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
+
+  private static readonly CHAT_MESSAGE_MAX_LENGTH = 500;
+  private static readonly CHAT_HISTORY_LIMIT = 50;
 
   // ---------------------------------------------------------------------
   // Players
@@ -119,7 +126,9 @@ export class BingoService {
     if (ids.length === 0) {
       return [];
     }
-    return this.playerRepository.find({ where: { id: In(ids) } });
+    // `relations: ['user']` so callers (e.g. presence) can read the linked User.role without a
+    // second round trip - a player's admin/mod badge lives on their site account, not on BingoPlayer.
+    return this.playerRepository.find({ where: { id: In(ids) }, relations: ['user'] });
   }
 
   async updatePlayer(id: string, partial: Partial<BingoPlayer>): Promise<BingoPlayer> {
@@ -349,6 +358,12 @@ export class BingoService {
     return this.cardRepository.count({ where: { gameId } });
   }
 
+  /** Distinct player ids that own at least one card in this game - "actually playing" vs. just present. */
+  async getCardOwnerIds(gameId: string): Promise<string[]> {
+    const cards = await this.cardRepository.find({ where: { gameId }, select: ['ownerId'] });
+    return Array.from(new Set(cards.map((c) => c.ownerId)));
+  }
+
   /**
    * The countdown reached zero but nobody bought a card - there's nothing to start. Loops the
    * countdown back to a fresh 10s instead of leaving it stuck at 0 forever (which is what
@@ -559,6 +574,13 @@ export class BingoService {
     });
 
     const nextGame = await this.createGame({ roomId: result.game.roomId, config: {} });
+
+    if (!result.skipped) {
+      await this.recordSystemWinnerMessages(result.game, result.winners).catch((err) =>
+        this.logger.warn(`recordSystemWinnerMessages failed for game=${result.game.id}: ${(err as Error).message}`),
+      );
+    }
+
     return { game: result.game, winners: result.winners, nextGame };
   }
 
@@ -1242,5 +1264,105 @@ export class BingoService {
       performedBy,
     });
     return this.auditRepository.save(audit);
+  }
+
+  // ---------------------------------------------------------------------
+  // Chat
+  // ---------------------------------------------------------------------
+
+  async sendChatMessage(roomId: string, playerId: string, rawMessage: string): Promise<ChatMessageEntry> {
+    const message = (rawMessage ?? '').trim().slice(0, BingoService.CHAT_MESSAGE_MAX_LENGTH);
+    if (!message) {
+      throw new BadRequestException('Message cannot be empty');
+    }
+
+    const player = await this.getPlayer(playerId);
+    const role = player.userId ? (await this.userRoleFor(player.userId)) : null;
+
+    const entity = this.chatMessageRepository.create({
+      roomId,
+      playerId: player.id,
+      displayName: player.displayName ?? player.username,
+      role,
+      message,
+      type: BingoChatMessageType.CHAT,
+      createdAt: new Date(),
+    });
+    const saved = await this.chatMessageRepository.save(entity);
+    return this.toChatMessageEntry(saved);
+  }
+
+  async getChatHistory(roomId: string): Promise<ChatMessageEntry[]> {
+    const messages = await this.chatMessageRepository.find({
+      where: { roomId },
+      order: { createdAt: 'DESC' },
+      take: BingoService.CHAT_HISTORY_LIMIT,
+    });
+    return messages.reverse().map((m) => this.toChatMessageEntry(m));
+  }
+
+  private async userRoleFor(userId: string): Promise<string | null> {
+    const user = await this.dataSource.getRepository(User).findOne({ where: { id: userId } });
+    return user?.role ?? null;
+  }
+
+  private toChatMessageEntry(entity: BingoChatMessage): ChatMessageEntry {
+    return {
+      id: entity.id,
+      playerId: entity.playerId,
+      displayName: entity.displayName,
+      role: entity.role,
+      message: entity.message,
+      type: entity.type as 'chat' | 'system',
+      createdAt: new Date(entity.createdAt).toISOString(),
+    };
+  }
+
+  /**
+   * Announces every winner of a just-finished game into the room's chat history, formatted like
+   * "Han cantado linea en la bola 31. Kinora ha ganado 729000 fichas por Linea." Timestamped to
+   * when that round ACTUALLY happened (startAt + roundNumber seconds), not "now" - so it lands in
+   * the right chronological spot in history relative to real chat messages sent during the game.
+   * Not broadcast live: every already-connected client already reveals this locally, in sync with
+   * its own ball animation (see BingoGameManager.RevealWinnersForRound on the client) - this is
+   * purely for players who join/reconnect later and need the log to catch up on.
+   */
+  async recordSystemWinnerMessages(game: BingoGame, winners: BingoWinner[]): Promise<void> {
+    if (winners.length === 0 || !game.startAt) {
+      return;
+    }
+
+    const playerIds = Array.from(new Set(winners.map((w) => w.playerId)));
+    const players = await this.getPlayersByIds(playerIds);
+    const nameById = new Map(players.map((p) => [p.id, p.displayName ?? p.username]));
+    const startAtMs = new Date(game.startAt).getTime();
+
+    const labels: Record<string, string> = {
+      [BingoWinType.LINE]: 'línea',
+      [BingoWinType.DOUBLE_LINE]: 'doble línea',
+      [BingoWinType.BINGO]: 'bingo',
+      [BingoWinType.SUPERBINGO]: 'superbingo',
+    };
+
+    const entities = winners
+      .filter((w) => w.roundNumber !== null)
+      .map((w) => {
+        const label = labels[w.winType] ?? w.winType;
+        const nick = nameById.get(w.playerId) ?? 'Jugador';
+        const message = `Han cantado ${label} en la bola ${w.roundNumber}. ${nick} ha ganado ${Number(w.prizeAmount)} fichas por ${label.charAt(0).toUpperCase()}${label.slice(1)}.`;
+        return this.chatMessageRepository.create({
+          roomId: game.roomId,
+          playerId: w.playerId,
+          displayName: nick,
+          role: null,
+          message,
+          type: BingoChatMessageType.SYSTEM,
+          createdAt: new Date(startAtMs + (w.roundNumber as number) * 1000),
+        });
+      });
+
+    if (entities.length > 0) {
+      await this.chatMessageRepository.save(entities);
+    }
   }
 }

@@ -17,6 +17,10 @@ export interface UpdateMarksMessage {
   marks: Record<string, boolean>;
 }
 
+export interface ChatSendMessage {
+  message: string;
+}
+
 // ---- Server -> Client ----
 
 export interface PlayerSummary {
@@ -74,11 +78,26 @@ export interface GameSnapshotPayload {
 }
 
 /** Who is actually sitting in the room right now (socket connected), independent of whether
- *  they've bought any cards yet - drives the room's avatar row. */
+ *  they've bought any cards yet - drives the room's avatar row and the player list panel. */
 export interface PresenceEntry {
   playerId: string;
   userId: string | null;
   displayName: string;
+  level: number;
+  /** 'admin' | 'mod' | 'user' | null - null when the player has no linked site account. */
+  role: string | null;
+  /** Has at least one card in the room's CURRENT game - "jugando" vs. just sitting in the room. */
+  isPlaying: boolean;
+}
+
+export interface ChatMessageEntry {
+  id: string;
+  playerId: string | null;
+  displayName: string;
+  role: string | null;
+  message: string;
+  type: 'chat' | 'system';
+  createdAt: string;
 }
 
 export interface RoomStatePayload {
@@ -86,6 +105,9 @@ export interface RoomStatePayload {
   room: { id: string; name: string; betAmount: number; maxPlayers: number };
   game: GameSnapshotPayload;
   presence: PresenceEntry[];
+  /** Last N messages (chat + system) for this room, oldest first - lets someone who just
+   *  connected (or reconnected) catch up on the conversation. */
+  chatHistory: ChatMessageEntry[];
 }
 
 export interface GameFinishedPayload {

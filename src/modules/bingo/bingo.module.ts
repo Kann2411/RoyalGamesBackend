@@ -14,6 +14,7 @@ import { BingoTicket } from './entities/bingo-ticket.entity';
 import { BingoRound } from './entities/bingo-round.entity';
 import { BingoWinner } from './entities/bingo-winner.entity';
 import { BingoAudit } from './entities/bingo-audit.entity';
+import { BingoChatMessage } from './entities/bingo-chat-message.entity';
 import { User } from '../users/entities/user.entity';
 
 @Module({
@@ -28,6 +29,7 @@ import { User } from '../users/entities/user.entity';
       BingoRound,
       BingoWinner,
       BingoAudit,
+      BingoChatMessage,
       User,
     ]),
   ],

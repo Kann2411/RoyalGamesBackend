@@ -44,6 +44,9 @@ export class BingoPlayer {
   @Column({ type: 'bigint', default: 0 })
   chips: number;
 
+  @Column({ type: 'int', default: 1 })
+  level: number;
+
   @Column({ type: 'enum', enum: BingoPlayerStatus, default: BingoPlayerStatus.OFFLINE })
   status: BingoPlayerStatus;
 
