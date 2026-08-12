@@ -41,6 +41,7 @@ export class BingoEngineService implements OnModuleInit {
 
   async onModuleInit(): Promise<void> {
     await this.bingoService.ensureDefaultRooms();
+    await this.bingoService.ensureLobbyRoom();
 
     // Emergency kill switch: if the engine ever needs to be stopped in production without a
     // redeploy (e.g. while diagnosing a DB issue), set BINGO_ENGINE_ENABLED=false in Render's

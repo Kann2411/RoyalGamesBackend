@@ -46,6 +46,14 @@ export class BingoController {
     return this.bingoService.createRoom(dto);
   }
 
+  /** The main-menu chat/presence panel connects here (not a real bingo room, no games run in it).
+   *  Must stay registered before 'rooms/:id' below, or that route would swallow 'lobby' as an id. */
+  @Get('rooms/lobby')
+  async getLobbyRoom() {
+    const room = await this.bingoService.ensureLobbyRoom();
+    return { id: room.id, name: room.name };
+  }
+
   @Get('rooms/:id')
   getRoom(@Param('id') id: string) {
     return this.bingoService.getRoom(id);

@@ -40,16 +40,19 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       }
 
       await this.bingoService.getPlayer(playerId);
-      await this.bingoService.getRoom(roomId);
+      const room = await this.bingoService.getRoom(roomId);
 
       this.registry.register(client, roomId, playerId);
       client.on('message', (raw: WebSocket.RawData) => this.handleMessage(client, raw));
       client.on('error', (err) => this.logger.warn(`Socket error for player ${playerId}: ${err.message}`));
 
-      // Someone showing up to an empty, untouched WAITING game is what starts its countdown -
-      // not the first purchase. No-ops if it's already counting down or the game isn't WAITING.
-      const currentGame = await this.bingoService.getRoomCurrentGame(roomId);
-      await this.bingoService.ensurePurchaseWindowStarted(currentGame.id);
+      // The lobby is a chat/presence-only pseudo-room - no game ever runs in it.
+      if (!room.isLobby) {
+        // Someone showing up to an empty, untouched WAITING game is what starts its countdown -
+        // not the first purchase. No-ops if it's already counting down or the game isn't WAITING.
+        const currentGame = await this.bingoService.getRoomCurrentGame(roomId);
+        await this.bingoService.ensurePurchaseWindowStarted(currentGame.id);
+      }
 
       // Broadcasting (not just sending to the new client) is what makes the room's avatar row
       // live: everyone already in the room needs to see this new arrival too.
@@ -156,6 +159,22 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private async buildRoomStatePayload(roomId: string): Promise<RoomStatePayload> {
     const room = await this.bingoService.getRoom(roomId);
+
+    if (room.isLobby) {
+      const [presence, chatHistory] = await Promise.all([
+        this.buildPresence(roomId, null),
+        this.bingoService.getChatHistory(roomId),
+      ]);
+
+      return {
+        serverTime: new Date().toISOString(),
+        room: { id: room.id, name: room.name, betAmount: 0, maxPlayers: room.maxPlayers },
+        game: null,
+        presence,
+        chatHistory,
+      };
+    }
+
     const game = await this.bingoService.getRoomCurrentGame(roomId);
     const gameSnapshot = await this.bingoService.buildGameSnapshot(game);
     const [presence, chatHistory] = await Promise.all([
@@ -172,14 +191,14 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     };
   }
 
-  private async buildPresence(roomId: string, currentGameId: string): Promise<PresenceEntry[]> {
+  private async buildPresence(roomId: string, currentGameId: string | null): Promise<PresenceEntry[]> {
     const playerIds = this.registry.getRoomPlayerIds(roomId);
     if (playerIds.length === 0) {
       return [];
     }
     const [players, playingIds] = await Promise.all([
       this.bingoService.getPlayersByIds(playerIds),
-      this.bingoService.getCardOwnerIds(currentGameId),
+      currentGameId ? this.bingoService.getCardOwnerIds(currentGameId) : Promise.resolve([] as string[]),
     ]);
     const playingSet = new Set(playingIds);
 

@@ -35,6 +35,11 @@ export class BingoRoom {
   @Column({ type: 'boolean', default: true })
   isActive: boolean;
 
+  /** The single virtual room backing the main-menu chat/presence panel - never has real bingo
+   *  games, excluded from the room list and from the engine's tick loop (isActive stays false). */
+  @Column({ type: 'boolean', default: false })
+  isLobby: boolean;
+
   @Column({ type: 'jsonb', nullable: true })
   config: Record<string, any>;
 

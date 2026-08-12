@@ -208,6 +208,36 @@ export class BingoService {
     return created;
   }
 
+  /** The single virtual room backing the main-menu chat/presence panel. isActive stays false so
+   *  it never shows up in getRooms() (the "Salas disponibles" list) or in the engine's tick loop -
+   *  it only exists as a target for chat_send/presence over the same WS connection. */
+  async ensureLobbyRoom(): Promise<BingoRoom> {
+    const existing = await this.roomRepository.findOne({ where: { isLobby: true } });
+    if (existing) {
+      return existing;
+    }
+
+    const room = this.roomRepository.create({
+      name: 'Lobby',
+      type: BingoRoomType.PUBLIC,
+      betAmount: 0,
+      maxPlayers: 100000,
+      isActive: false,
+      isLobby: true,
+      config: {},
+    });
+
+    return this.roomRepository.save(room);
+  }
+
+  async getLobbyRoom(): Promise<BingoRoom> {
+    const room = await this.roomRepository.findOne({ where: { isLobby: true } });
+    if (!room) {
+      throw new NotFoundException('Lobby room not initialized');
+    }
+    return room;
+  }
+
   async getRoom(id: string): Promise<BingoRoom> {
     const room = await this.roomRepository.findOne({ where: { id } });
     if (!room) {

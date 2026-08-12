@@ -105,7 +105,8 @@ export interface ChatMessageEntry {
 export interface RoomStatePayload {
   serverTime: string;
   room: { id: string; name: string; betAmount: number; maxPlayers: number };
-  game: GameSnapshotPayload;
+  /** null for the Lobby pseudo-room - no bingo game ever runs there. */
+  game: GameSnapshotPayload | null;
   presence: PresenceEntry[];
   /** Last N messages (chat + system) for this room, oldest first - lets someone who just
    *  connected (or reconnected) catch up on the conversation. */
