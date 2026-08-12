@@ -1312,6 +1312,7 @@ export class BingoService {
     const entity = this.chatMessageRepository.create({
       roomId,
       playerId: player.id,
+      userId: player.userId,
       displayName: player.displayName ?? player.username,
       role,
       message,
@@ -1340,6 +1341,7 @@ export class BingoService {
     return {
       id: entity.id,
       playerId: entity.playerId,
+      userId: entity.userId,
       displayName: entity.displayName,
       role: entity.role,
       message: entity.message,

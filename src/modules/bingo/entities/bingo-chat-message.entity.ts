@@ -27,6 +27,11 @@ export class BingoChatMessage {
   @JoinColumn({ name: 'playerId' })
   player: BingoPlayer;
 
+  // Snapshotted at send time (same reasoning as displayName above) - lets the client fetch this
+  // sender's real avatar (/user/{userId}/avatar-image) without joining BingoPlayer on every read.
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
+
   // Snapshotted at send time (not joined live) so a later rename/promotion doesn't rewrite
   // history, and so a system message about a winner still renders correctly.
   @Column({ type: 'varchar', length: 120 })

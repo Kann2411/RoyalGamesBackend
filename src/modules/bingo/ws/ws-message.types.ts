@@ -95,6 +95,8 @@ export interface PresenceEntry {
 export interface ChatMessageEntry {
   id: string;
   playerId: string | null;
+  /** null for system messages and for players with no linked site account - no avatar to fetch. */
+  userId: string | null;
   displayName: string;
   role: string | null;
   message: string;
