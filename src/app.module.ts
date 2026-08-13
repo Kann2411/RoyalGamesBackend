@@ -9,6 +9,8 @@ import { PaymentsModule } from './modules/payments/payments.module';
 import { ChipsModule } from './modules/chips/chips.module';
 import { MailingModule } from './modules/mailing/mailing.module';
 import { BingoModule } from './modules/bingo/bingo.module';
+import { FriendsModule } from './modules/friends/friends.module';
+import { MessagesModule } from './modules/messages/messages.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -36,6 +38,8 @@ import { AppService } from './app.service';
     ChipsModule,
     MailingModule,
     BingoModule,
+    FriendsModule,
+    MessagesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

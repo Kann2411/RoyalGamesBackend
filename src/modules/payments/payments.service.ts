@@ -16,6 +16,7 @@ import {
 import { PaymentsRepository } from './repositories/payments.repository';
 import { MercadoPagoRepository } from './repositories/mercadopago.repository';
 import { PaymentStatus } from './enums/payment-status.enum';
+import { UsersService } from '../users/users.service';
 
 @Injectable()
 export class PaymentsService {
@@ -53,6 +54,7 @@ export class PaymentsService {
     private payRepository: Repository<Pay>,
     @InjectDataSource()
     private dataSource: DataSource,
+    private usersService: UsersService,
   ) {}
 
   /**
@@ -290,6 +292,7 @@ export class PaymentsService {
             // Actualizar usuario con chips
             user.chips = (user.chips || 0) + chips;
             await manager.save(User, user);
+            await this.usersService.registerDeposit(userId, chips, manager);
 
             if (pendingPayment) {
               // Actualizar orden pendiente existente
@@ -429,6 +432,7 @@ export class PaymentsService {
           // Actualizar chips del usuario
           user.chips = (user.chips || 0) + chips;
           await manager.save(User, user);
+          await this.usersService.registerDeposit(userId, chips, manager);
 
           this.logger.log(
             `Merchant Order processed - Payment approved for user ${userId}: +${chips} chips`,
@@ -537,6 +541,11 @@ export class PaymentsService {
           if (transactionUser) {
             transactionUser.chips = (transactionUser.chips || 0) + capturePayPalOrderDto.chips;
             await manager.save(User, transactionUser);
+            await this.usersService.registerDeposit(
+              capturePayPalOrderDto.userId,
+              capturePayPalOrderDto.chips,
+              manager,
+            );
           }
 
           const paymentId = response.result.id;

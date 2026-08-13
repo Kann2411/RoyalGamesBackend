@@ -12,6 +12,7 @@ import { Withdrawal } from '../../withdrawals/entities/withdrawal.entity';
 import { Bet } from '../../bets/entities/bet.entity';
 import { PromoCode } from '../../promo-codes/entities/promo-code.entity';
 import { Role } from '../../../common/enums/role.enum';
+import { RankTier } from '../../../common/enums/rank-tier.enum';
 
 @Entity('users')
 export class User {
@@ -70,6 +71,12 @@ export class User {
 
   @Column({ type: 'boolean', default: false })
   firstChips: boolean;
+
+  @Column({ type: 'enum', enum: RankTier, default: RankTier.BRONZE })
+  rank: RankTier;
+
+  @Column({ type: 'bigint', default: 0 })
+  totalChipsDeposited: number;
 
   @CreateDateColumn()
   createdAt: Date;

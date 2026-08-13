@@ -1,4 +1,5 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
+import { EntityManager } from 'typeorm';
 import { CreateUserDto } from './dtos/create-user.dto';
 import { UpdateUserDto } from './dtos/update-user.dto';
 import { UpdateAvatarDto } from './dtos/update-avatar.dto';
@@ -8,6 +9,7 @@ import { UsersRepository } from './repositories/users.repository';
 import { PasswordUtils } from '../../common/utils/password.utils';
 import { User } from './entities/user.entity';
 import { Role } from '../../common/enums/role.enum';
+import { RankTier } from '../../common/enums/rank-tier.enum';
 
 @Injectable()
 export class UsersService {
@@ -241,5 +243,49 @@ export class UsersService {
       throw new NotFoundException('User not found');
     }
     return { buffer: user.avatarBin, mime: user.avatarMime };
+  }
+
+  // Deposited-chips thresholds for each rank. 1000 chips = $1 USD is the fixed rate used
+  // across the whole app (see BuyChips.jsx), so chips deposited is a currency-agnostic
+  // stand-in for real money loaded, without needing to store/convert per-payment currency.
+  private static readonly RANK_THRESHOLDS: [RankTier, number][] = [
+    [RankTier.DIAMOND, 50000],
+    [RankTier.PLATINUM, 10000],
+    [RankTier.GOLD, 5000],
+    [RankTier.SILVER, 1000],
+    [RankTier.BRONZE, 0],
+  ];
+
+  private computeRank(totalChipsDeposited: number): RankTier {
+    const found = UsersService.RANK_THRESHOLDS.find(([, min]) => totalChipsDeposited >= min);
+    return found ? found[0] : RankTier.BRONZE;
+  }
+
+  /**
+   * Increments the user's lifetime deposited-chips counter and recomputes their rank.
+   * Must run inside the same transaction/manager that approves the deposit, so chips
+   * balance and rank progression can never drift apart.
+   */
+  async registerDeposit(userId: string, chipsAmount: number, manager: EntityManager): Promise<void> {
+    const updateResult = await manager.query(
+      `UPDATE users SET "totalChipsDeposited" = "totalChipsDeposited" + $1 WHERE id = $2 RETURNING "totalChipsDeposited"`,
+      [chipsAmount, userId],
+    );
+
+    let row: any = null;
+    if (Array.isArray(updateResult)) {
+      if (Array.isArray(updateResult[0]) && updateResult[0].length > 0) {
+        row = updateResult[0][0];
+      } else if (updateResult.length > 0 && typeof updateResult[0] === 'object') {
+        row = updateResult[0];
+      }
+    }
+    if (!row) {
+      return;
+    }
+
+    const newTotal = Number(row.totalChipsDeposited ?? 0);
+    const newRank = this.computeRank(newTotal);
+    await manager.query(`UPDATE users SET rank = $1 WHERE id = $2`, [newRank, userId]);
   }
 }

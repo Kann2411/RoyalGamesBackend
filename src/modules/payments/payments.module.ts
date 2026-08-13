@@ -6,9 +6,10 @@ import { PaymentsController } from './payments.controller';
 import { PaymentsService } from './payments.service';
 import { PaymentsRepository } from './repositories/payments.repository';
 import { MercadoPagoRepository } from './repositories/mercadopago.repository';
+import { UsersModule } from '../users/users.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([Pay, User])],
+  imports: [TypeOrmModule.forFeature([Pay, User]), UsersModule],
   controllers: [PaymentsController],
   providers: [PaymentsService, PaymentsRepository, MercadoPagoRepository],
   exports: [PaymentsService, PaymentsRepository, MercadoPagoRepository],
