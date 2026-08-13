@@ -81,4 +81,19 @@ export class AdminService {
       recentPayments,
     };
   }
+
+  /** Full deposit log for the admin panel: every payment record, any status, all users. */
+  async getDeposits(limit = 200) {
+    return this.paysRepository.query(
+      `
+      SELECT p.id, u.nick AS "userNick", p."userId", p.price, p.chips, p."paymentPlatform",
+             p.status, p."createdAt"
+      FROM pays p
+      JOIN users u ON u.id = p."userId"
+      ORDER BY p."createdAt" DESC
+      LIMIT $1
+      `,
+      [limit],
+    );
+  }
 }

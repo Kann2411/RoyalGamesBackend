@@ -1,20 +1,30 @@
-import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
+import { Injectable, UnauthorizedException, ConflictException, BadRequestException, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { Repository } from 'typeorm';
 import { InjectRepository } from '@nestjs/typeorm';
 import { OAuth2Client } from 'google-auth-library';
+import * as crypto from 'crypto';
 import { User } from '../users/entities/user.entity';
+import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { PasswordUtils } from '../../common/utils/password.utils';
 import { LoginDto } from './dtos/login.dto';
+import { MailingService } from '../mailing/mailing.service';
+
+const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
+const FRONTEND_URL = process.env.FRONTEND_URL || 'https://royalgames.lat';
 
 @Injectable()
 export class AuthService {
   private googleClient: OAuth2Client;
+  private readonly logger = new Logger(AuthService.name);
 
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    @InjectRepository(PasswordResetToken)
+    private resetTokenRepository: Repository<PasswordResetToken>,
     private jwtService: JwtService,
+    private mailingService: MailingService,
   ) {
     this.googleClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
   }
@@ -175,5 +185,102 @@ export class AuthService {
 
   async validateUser(id: string): Promise<User | null> {
     return this.usersRepository.findOne({ where: { id } });
+  }
+
+  private hashToken(token: string): string {
+    return crypto.createHash('sha256').update(token).digest('hex');
+  }
+
+  /**
+   * Always resolves to a generic success — never reveals whether the email exists, to avoid
+   * account enumeration. If the account exists and has a password, emails a reset link; if it's
+   * a Google-only account, emails a nudge to use Google login instead; if it doesn't exist, does
+   * nothing.
+   */
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    const genericResult = {
+      message: 'Si el correo existe en nuestra plataforma, vas a recibir un email con instrucciones.',
+    };
+
+    const emailLower = email.toLowerCase();
+    const user = await this.usersRepository.findOne({ where: { email: emailLower } });
+    if (!user) {
+      return genericResult;
+    }
+
+    if (!user.password) {
+      this.mailingService
+        .sendMail({
+          to: user.email,
+          subject: 'Recuperar contraseña - RoyalGames',
+          html: `
+            <h2>Hola ${user.nick}</h2>
+            <p>Tu cuenta de RoyalGames fue creada con Google, así que no tiene una contraseña propia.</p>
+            <p>Iniciá sesión usando el botón "Continuar con Google".</p>
+          `,
+        })
+        .catch((err) => this.logger.error('Failed to send Google-account notice email', err));
+      return genericResult;
+    }
+
+    // Invalidate any previous outstanding tokens for this user before issuing a new one.
+    await this.resetTokenRepository.delete({ userId: user.id, used: false });
+
+    const rawToken = crypto.randomBytes(32).toString('hex');
+    await this.resetTokenRepository.save(
+      this.resetTokenRepository.create({
+        userId: user.id,
+        tokenHash: this.hashToken(rawToken),
+        expiresAt: new Date(Date.now() + RESET_TOKEN_TTL_MS),
+      }),
+    );
+
+    const resetLink = `${FRONTEND_URL}/restablecer-contrasena?token=${rawToken}`;
+    this.mailingService
+      .sendMail({
+        to: user.email,
+        subject: 'Recuperar contraseña - RoyalGames',
+        html: `
+          <h2>Hola ${user.nick}</h2>
+          <p>Recibimos una solicitud para restablecer tu contraseña. Si fuiste vos, hacé clic en el siguiente enlace (válido por 1 hora):</p>
+          <p><a href="${resetLink}">${resetLink}</a></p>
+          <p>Si no fuiste vos, podés ignorar este correo.</p>
+        `,
+      })
+      .catch((err) => this.logger.error('Failed to send password reset email', err));
+
+    return genericResult;
+  }
+
+  async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+    const tokenHash = this.hashToken(token);
+    const resetToken = await this.resetTokenRepository.findOne({ where: { tokenHash, used: false } });
+
+    if (!resetToken || resetToken.expiresAt.getTime() < Date.now()) {
+      throw new BadRequestException('El enlace es inválido o expiró. Solicitá uno nuevo.');
+    }
+
+    const user = await this.usersRepository.findOne({ where: { id: resetToken.userId } });
+    if (!user) {
+      throw new BadRequestException('El enlace es inválido o expiró. Solicitá uno nuevo.');
+    }
+
+    user.password = await PasswordUtils.hashPassword(newPassword);
+    await this.usersRepository.save(user);
+
+    resetToken.used = true;
+    await this.resetTokenRepository.save(resetToken);
+    // Any other outstanding tokens for this user are now moot.
+    await this.resetTokenRepository.delete({ userId: user.id, used: false });
+
+    this.mailingService
+      .sendMail({
+        to: user.email,
+        subject: 'Tu contraseña fue actualizada - RoyalGames',
+        html: `<h2>Hola ${user.nick}</h2><p>Tu contraseña se cambió correctamente. Si no fuiste vos, contactá a soporte de inmediato.</p>`,
+      })
+      .catch((err) => this.logger.error('Failed to send password-changed confirmation email', err));
+
+    return { message: 'Tu contraseña fue actualizada correctamente.' };
   }
 }

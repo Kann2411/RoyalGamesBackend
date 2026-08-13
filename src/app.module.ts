@@ -13,6 +13,7 @@ import { FriendsModule } from './modules/friends/friends.module';
 import { MessagesModule } from './modules/messages/messages.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { LeaderboardModule } from './modules/leaderboard/leaderboard.module';
+import { SupportModule } from './modules/support/support.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -44,6 +45,7 @@ import { AppService } from './app.service';
     MessagesModule,
     AdminModule,
     LeaderboardModule,
+    SupportModule,
   ],
   controllers: [AppController],
   providers: [AppService],

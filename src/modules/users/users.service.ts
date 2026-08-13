@@ -1,5 +1,6 @@
 import { Injectable, NotFoundException, BadRequestException, ConflictException } from '@nestjs/common';
-import { EntityManager } from 'typeorm';
+import { EntityManager, Repository } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
 import { CreateUserDto } from './dtos/create-user.dto';
 import { UpdateUserDto } from './dtos/update-user.dto';
 import { UpdateAvatarDto } from './dtos/update-avatar.dto';
@@ -10,10 +11,21 @@ import { PasswordUtils } from '../../common/utils/password.utils';
 import { User } from './entities/user.entity';
 import { Role } from '../../common/enums/role.enum';
 import { RankTier } from '../../common/enums/rank-tier.enum';
+import { ChipsAward } from '../chips/entities/chips-award.entity';
 
 @Injectable()
 export class UsersService {
-  constructor(private usersRepository: UsersRepository) {}
+  constructor(
+    private usersRepository: UsersRepository,
+    @InjectRepository(ChipsAward)
+    private chipsAwardRepository: Repository<ChipsAward>,
+  ) {}
+
+  private async logWelcomeBonus(userId: string, amount: number): Promise<void> {
+    await this.chipsAwardRepository.save(
+      this.chipsAwardRepository.create({ userId, amount, source: 'welcome' }),
+    );
+  }
 
   async createUser(createUserDto: CreateUserDto): Promise<Partial<User> & { firstChipsReceived: boolean }> {
     const emailLowerCase = createUserDto.email.toLowerCase();
@@ -47,6 +59,9 @@ export class UsersService {
     // Grant first chips atomically (only for first 100 users)
     const updatedUser = await this.usersRepository.giveFirstChipsAtomic(user.id, 1000000);
     const firstChipsReceived = updatedUser !== null;
+    if (firstChipsReceived) {
+      await this.logWelcomeBonus(user.id, 1000000);
+    }
 
     // Fetch updated user with chips
     const userToReturn = updatedUser || await this.usersRepository.findById(user.id);
@@ -209,6 +224,8 @@ export class UsersService {
       // If the user exists but no row was updated, they already received first chips
       throw new BadRequestException('User already received first chips');
     }
+
+    await this.logWelcomeBonus(userId, FIRST_CHIPS_AMOUNT);
 
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;

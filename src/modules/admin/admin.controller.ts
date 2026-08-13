@@ -1,4 +1,4 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth } from '@nestjs/swagger';
 import { AdminService } from './admin.service';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -18,5 +18,13 @@ export class AdminController {
   @ApiOperation({ summary: 'Platform-wide stats overview (Admin only)' })
   async getOverview() {
     return this.adminService.getOverview();
+  }
+
+  @Get('deposits')
+  @ApiOperation({ summary: 'Full deposit log across all users (Admin only)' })
+  async getDeposits(@Query('limit') limitParam?: string) {
+    const parsed = limitParam ? parseInt(limitParam, 10) : NaN;
+    const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 500) : 200;
+    return this.adminService.getDeposits(limit);
   }
 }

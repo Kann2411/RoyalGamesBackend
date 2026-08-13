@@ -19,6 +19,15 @@ export class ChipsRepository {
     );
   }
 
+  /** Non-gameplay chip movements for a user's own history (admin adjustments + welcome bonus). */
+  async findNonGameAwards(userId: string): Promise<ChipsAward[]> {
+    return this.chipsAwardRepository
+      .createQueryBuilder('ca')
+      .where('ca.userId = :userId AND ca.source != :game', { userId, game: 'game' })
+      .orderBy('ca.createdAt', 'DESC')
+      .getMany();
+  }
+
   async addChips(userId: string, amount: number): Promise<User | null> {
     const user = await this.usersRepository.findOne({ where: { id: userId } });
     if (user) {

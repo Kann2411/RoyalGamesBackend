@@ -18,6 +18,7 @@ import {
 import { ChipsService } from './chips.service';
 import { ChipsTransactionDto } from './dtos/chips-transaction.dto';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
+import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '../../common/enums/role.enum';
 
@@ -43,13 +44,22 @@ export class ChipsController {
   }
 
   @Put('remove/chips')
+  @UseGuards(OptionalJwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Remove chips from user' })
+  @ApiOperation({ summary: 'Remove chips from user (called by admins and by the external games)' })
   @ApiResponse({ status: 200, description: 'Chips removed successfully' })
   @ApiResponse({ status: 400, description: 'Insufficient chips' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async removeChips(@Body() chipsTransactionDto: ChipsTransactionDto) {
-    return this.chipsService.removeChips(chipsTransactionDto);
+  async removeChips(@Body() chipsTransactionDto: ChipsTransactionDto, @CurrentUser() user: any) {
+    const source = user?.role === Role.ADMIN ? 'admin' : 'game';
+    return this.chipsService.removeChips(chipsTransactionDto, source);
+  }
+
+  @Get('chips/history')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'My chip movement history (deposits + non-game adjustments, no gameplay)' })
+  async getHistory(@CurrentUser() user: any) {
+    return this.chipsService.getHistory(user.id);
   }
 
   @Get('chips/:userId')
