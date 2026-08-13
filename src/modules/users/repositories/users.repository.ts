@@ -34,8 +34,23 @@ export class UsersRepository {
     return this.repository.count();
   }
 
-  async updateLastSeen(id: string): Promise<void> {
-    await this.repository.query(`UPDATE users SET "lastSeen" = now() WHERE id = $1`, [id]);
+  async updateLastSeen(id: string, currentActivity?: string | null): Promise<void> {
+    await this.repository.query(
+      `UPDATE users SET "lastSeen" = now(), "currentActivity" = $2 WHERE id = $1`,
+      [id, currentActivity ?? null],
+    );
+  }
+
+  /** Users active in the last 5 minutes, most recent first. */
+  async findOnline(limit = 20): Promise<Array<Pick<User, 'id' | 'nick' | 'rank' | 'currentActivity'>>> {
+    return this.repository.query(
+      `SELECT id, nick, rank, "currentActivity"
+       FROM users
+       WHERE "lastSeen" > now() - interval '5 minutes'
+       ORDER BY "lastSeen" DESC
+       LIMIT $1`,
+      [limit],
+    );
   }
 
   async create(userData: Partial<User>): Promise<User> {

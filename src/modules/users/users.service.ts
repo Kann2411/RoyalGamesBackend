@@ -137,8 +137,12 @@ export class UsersService {
     return { count };
   }
 
-  async updateLastSeen(userId: string): Promise<void> {
-    await this.usersRepository.updateLastSeen(userId);
+  async updateLastSeen(userId: string, currentActivity?: string | null): Promise<void> {
+    await this.usersRepository.updateLastSeen(userId, currentActivity);
+  }
+
+  async getOnlineUsers(limit = 20) {
+    return this.usersRepository.findOnline(limit);
   }
 
   async banUser(manageUserDto: ManageUserDto): Promise<Partial<User>> {

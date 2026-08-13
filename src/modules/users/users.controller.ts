@@ -76,10 +76,18 @@ export class UsersController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Mark the current user as recently active' })
-  async heartbeat(@CurrentUser() user: any) {
-    await this.usersService.updateLastSeen(user.id);
+  @ApiOperation({ summary: 'Mark the current user as recently active, optionally noting what page/game they are on' })
+  async heartbeat(@CurrentUser() user: any, @Body('currentPath') currentPath?: string) {
+    await this.usersService.updateLastSeen(user.id, currentPath ?? null);
     return { ok: true };
+  }
+
+  @Get('users/online')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List recently active users (any logged-in user)' })
+  async getOnlineUsers() {
+    return this.usersService.getOnlineUsers();
   }
 
   @Get('user/:id')

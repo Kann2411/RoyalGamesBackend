@@ -2,12 +2,16 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { ChipsTransactionDto } from './dtos/chips-transaction.dto';
 import { ChipsRepository } from './repositories/chips.repository';
 import { User } from '../users/entities/user.entity';
+import { ChipsAwardSource } from './entities/chips-award.entity';
 
 @Injectable()
 export class ChipsService {
   constructor(private chipsRepository: ChipsRepository) {}
 
-  async addChips(chipsTransactionDto: ChipsTransactionDto): Promise<Partial<User>> {
+  async addChips(
+    chipsTransactionDto: ChipsTransactionDto,
+    source: ChipsAwardSource = 'game',
+  ): Promise<Partial<User>> {
     const currentChips = await this.chipsRepository.getChips(
       chipsTransactionDto.userId,
     );
@@ -24,6 +28,8 @@ export class ChipsService {
     if (!updatedUser) {
       throw new NotFoundException('User not found');
     }
+
+    await this.chipsRepository.logAward(chipsTransactionDto.userId, chipsTransactionDto.amount, source);
 
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;

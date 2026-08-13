@@ -81,6 +81,9 @@ export class User {
   @Column({ type: 'timestamp', nullable: true })
   lastSeen: Date | null;
 
+  @Column({ type: 'varchar', length: 120, nullable: true })
+  currentActivity: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

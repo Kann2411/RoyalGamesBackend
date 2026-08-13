@@ -14,30 +14,32 @@ import {
   ApiOperation,
   ApiResponse,
   ApiParam,
-  ApiBearerAuth,
 } from '@nestjs/swagger';
 import { ChipsService } from './chips.service';
 import { ChipsTransactionDto } from './dtos/chips-transaction.dto';
-import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
-import { RolesGuard } from '../../common/guards/roles.guard';
-import { Roles } from '../../common/decorators/roles.decorator';
+import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '../../common/enums/role.enum';
 
 @ApiTags('Chips')
-@ApiBearerAuth()
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
 @Controller()
 export class ChipsController {
   constructor(private chipsService: ChipsService) {}
 
+  // NOTE: intentionally NOT admin-only. The external iframe-hosted games (Minas, Pachinka,
+  // Royal Joker — see ALLOWED_ORIGINS) settle bets/winnings by calling this endpoint directly
+  // with no JWT (they only know the player's userId). OptionalJwtAuthGuard is used purely to
+  // tag who made the call (admin vs. an anonymous game client) for the chips_awards ledger —
+  // it never blocks the request.
   @Put('add/chips')
+  @UseGuards(OptionalJwtAuthGuard)
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Add chips to user' })
+  @ApiOperation({ summary: 'Add chips to user (called by admins and by the external games)' })
   @ApiResponse({ status: 200, description: 'Chips added successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async addChips(@Body() chipsTransactionDto: ChipsTransactionDto) {
-    return this.chipsService.addChips(chipsTransactionDto);
+  async addChips(@Body() chipsTransactionDto: ChipsTransactionDto, @CurrentUser() user: any) {
+    const source = user?.role === Role.ADMIN ? 'admin' : 'game';
+    return this.chipsService.addChips(chipsTransactionDto, source);
   }
 
   @Put('remove/chips')
