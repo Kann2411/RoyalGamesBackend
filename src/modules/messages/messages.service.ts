@@ -40,31 +40,30 @@ export class MessagesService {
   }
 
   async getThread(userId: string, otherUserId: string, limit = 50): Promise<Message[]> {
-    const rows = await this.messageRepository
-      .createQueryBuilder('m')
-      .where(
-        '(m.senderId = :userId AND m.recipientId = :otherUserId) OR (m.senderId = :otherUserId AND m.recipientId = :userId)',
-        { userId, otherUserId },
-      )
-      .orderBy('m.createdAt', 'DESC')
-      .take(limit)
-      .getMany();
+    const rows = await this.messageRepository.query(
+      `
+      SELECT * FROM (
+        SELECT id, "senderId", "recipientId", content, "read", "createdAt"
+        FROM messages
+        WHERE ("senderId" = $1 AND "recipientId" = $2) OR ("senderId" = $2 AND "recipientId" = $1)
+        ORDER BY "createdAt" DESC
+        LIMIT $3
+      ) sub
+      ORDER BY "createdAt" ASC;
+      `,
+      [userId, otherUserId, limit],
+    );
 
     await this.markThreadRead(userId, otherUserId);
 
-    return rows.reverse();
+    return rows;
   }
 
   async markThreadRead(userId: string, otherUserId: string): Promise<void> {
-    await this.messageRepository
-      .createQueryBuilder()
-      .update(Message)
-      .set({ read: true })
-      .where('"recipientId" = :userId AND "senderId" = :otherUserId AND "read" = false', {
-        userId,
-        otherUserId,
-      })
-      .execute();
+    await this.messageRepository.query(
+      `UPDATE messages SET "read" = true WHERE "recipientId" = $1 AND "senderId" = $2 AND "read" = false`,
+      [userId, otherUserId],
+    );
   }
 
   /**
