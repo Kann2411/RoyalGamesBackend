@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, ParseUUIDPipe, ParseIntPipe } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Body, Param, Query, UseGuards, ParseUUIDPipe } from '@nestjs/common';
 import { ApiTags, ApiOperation, ApiBearerAuth, ApiParam, ApiQuery } from '@nestjs/swagger';
 import { MessagesService } from './messages.service';
 import { SendMessageDto } from './dtos/send-message.dto';
@@ -31,9 +31,11 @@ export class MessagesController {
   async thread(
     @Param('userId', new ParseUUIDPipe()) userId: string,
     @CurrentUser() user: any,
-    @Query('limit', new ParseIntPipe({ optional: true })) limit?: number,
+    @Query('limit') limitParam?: string,
   ) {
-    return this.messagesService.getThread(user.id, userId, limit || 50);
+    const parsedLimit = limitParam ? parseInt(limitParam, 10) : NaN;
+    const limit = Number.isFinite(parsedLimit) && parsedLimit > 0 ? parsedLimit : 50;
+    return this.messagesService.getThread(user.id, userId, limit);
   }
 
   @Patch('thread/:userId/read')

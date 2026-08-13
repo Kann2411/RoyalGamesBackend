@@ -78,6 +78,9 @@ export class User {
   @Column({ type: 'bigint', default: 0 })
   totalChipsDeposited: number;
 
+  @Column({ type: 'timestamp', nullable: true })
+  lastSeen: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

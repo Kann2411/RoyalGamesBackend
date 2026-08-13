@@ -132,6 +132,15 @@ export class UsersService {
     return users.map(({ password, ...userWithoutPassword }) => userWithoutPassword);
   }
 
+  async getUsersCount(): Promise<{ count: number }> {
+    const count = await this.usersRepository.count();
+    return { count };
+  }
+
+  async updateLastSeen(userId: string): Promise<void> {
+    await this.usersRepository.updateLastSeen(userId);
+  }
+
   async banUser(manageUserDto: ManageUserDto): Promise<Partial<User>> {
     const user = await this.usersRepository.findById(manageUserDto.userId);
     if (!user) {

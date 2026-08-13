@@ -11,6 +11,7 @@ import { MailingModule } from './modules/mailing/mailing.module';
 import { BingoModule } from './modules/bingo/bingo.module';
 import { FriendsModule } from './modules/friends/friends.module';
 import { MessagesModule } from './modules/messages/messages.module';
+import { AdminModule } from './modules/admin/admin.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -40,6 +41,7 @@ import { AppService } from './app.service';
     BingoModule,
     FriendsModule,
     MessagesModule,
+    AdminModule,
   ],
   controllers: [AppController],
   providers: [AppService],

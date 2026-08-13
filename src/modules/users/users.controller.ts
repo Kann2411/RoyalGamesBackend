@@ -56,10 +56,30 @@ export class UsersController {
   }
 
   @Get('getUsers')
-  @ApiOperation({ summary: 'Get all users' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get all users (Admin only)' })
   @ApiResponse({ status: 200, description: 'Users retrieved successfully' })
   async getAllUsers() {
     return this.usersService.getAllUsers();
+  }
+
+  @Get('users/count')
+  @ApiOperation({ summary: 'Get total registered user count (public)' })
+  @ApiResponse({ status: 200, description: 'Count retrieved successfully' })
+  async getUsersCount() {
+    return this.usersService.getUsersCount();
+  }
+
+  @Put('users/heartbeat')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Mark the current user as recently active' })
+  async heartbeat(@CurrentUser() user: any) {
+    await this.usersService.updateLastSeen(user.id);
+    return { ok: true };
   }
 
   @Get('user/:id')

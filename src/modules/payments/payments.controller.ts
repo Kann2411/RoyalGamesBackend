@@ -10,6 +10,7 @@ import {
   ParseUUIDPipe,
   Res,
   UseGuards,
+  ForbiddenException,
 } from '@nestjs/common';
 import { Response } from 'express';
 import {
@@ -27,6 +28,10 @@ import {
   CapturePayPalOrderDto,
 } from './dtos/create-payment.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
+import { Role } from '../../common/enums/role.enum';
+import { CurrentUser } from '../../common/decorators/current-user.decorator';
 
 @ApiTags('Payments')
 @Controller()
@@ -182,17 +187,26 @@ export class PaymentsController {
 
   // ============= GENERAL =============
   @Get('payments')
-  @ApiOperation({ summary: 'Get all payments' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiOperation({ summary: 'Get all payments (Admin only)' })
   @ApiResponse({ status: 200, description: 'Payments retrieved successfully' })
   async getAllPayments() {
     return this.paymentsService.getAllPayments();
   }
 
   @Get('payments/user/:userId')
-  @ApiOperation({ summary: 'Get user payments' })
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({ summary: 'Get user payments (self or admin)' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User payments retrieved successfully' })
-  async getUserPayments(@Param('userId', new ParseUUIDPipe()) userId: string) {
+  async getUserPayments(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @CurrentUser() currentUser: any,
+  ) {
+    if (currentUser.id !== userId && currentUser.role !== Role.ADMIN) {
+      throw new ForbiddenException('Cannot view another user\'s payments');
+    }
     return this.paymentsService.getUserPayments(userId);
   }
 }

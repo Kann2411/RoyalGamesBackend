@@ -30,6 +30,14 @@ export class UsersRepository {
     return this.repository.find();
   }
 
+  async count(): Promise<number> {
+    return this.repository.count();
+  }
+
+  async updateLastSeen(id: string): Promise<void> {
+    await this.repository.query(`UPDATE users SET "lastSeen" = now() WHERE id = $1`, [id]);
+  }
+
   async create(userData: Partial<User>): Promise<User> {
     const user = this.repository.create(userData);
     return this.repository.save(user);
