@@ -12,6 +12,7 @@ import { User } from './entities/user.entity';
 import { Role } from '../../common/enums/role.enum';
 import { RankTier } from '../../common/enums/rank-tier.enum';
 import { ChipsAward } from '../chips/entities/chips-award.entity';
+import { DEFAULT_AVATAR_BUFFER, DEFAULT_AVATAR_MIME, DEFAULT_AVATAR_DATA } from '../../common/constants/default-avatar';
 
 @Injectable()
 export class UsersService {
@@ -54,6 +55,9 @@ export class UsersService {
       password: hashedPassword,
       chips: 0,
       firstChips: false,
+      avatarBin: DEFAULT_AVATAR_BUFFER,
+      avatarMime: DEFAULT_AVATAR_MIME,
+      avatarData: DEFAULT_AVATAR_DATA,
     });
 
     // Grant first chips atomically (only for first 100 users)
@@ -98,12 +102,33 @@ export class UsersService {
       }
     }
 
-    const updatedUser = await this.usersRepository.update(id, updateUserDto);
+    // Password changes must go through changePassword() (current-password check + hashing).
+    // Silently dropping it here — instead of trusting the DTO — is what stops a raw, unhashed
+    // password from ever reaching this generic profile-update path.
+    const { password: _ignoredPassword, ...safeUpdateDto } = updateUserDto as any;
+
+    const updatedUser = await this.usersRepository.update(id, safeUpdateDto);
     if (!updatedUser) {
       throw new NotFoundException('User not found');
     }
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;
+  }
+
+  async changePassword(id: string, currentPassword: string, newPassword: string): Promise<void> {
+    const user = await this.usersRepository.findById(id);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    if (!user.password) {
+      throw new BadRequestException('Esta cuenta inició sesión con Google y no tiene contraseña propia');
+    }
+    const matches = await PasswordUtils.comparePasswords(currentPassword, user.password);
+    if (!matches) {
+      throw new BadRequestException('La contraseña actual es incorrecta');
+    }
+    const hashedPassword = await PasswordUtils.hashPassword(newPassword);
+    await this.usersRepository.update(id, { password: hashedPassword });
   }
 
   async deleteUser(id: string): Promise<void> {

@@ -15,8 +15,16 @@ export class SupportTicket {
   @PrimaryGeneratedColumn('uuid')
   id: string;
 
-  @Column({ type: 'uuid' })
-  userId: string;
+  @Column({ type: 'uuid', nullable: true })
+  userId: string | null;
+
+  // Set only for tickets opened by a non-registered visitor (see support.controller.ts's
+  // guest-tickets route) — that's the only way we have to reach back out to them.
+  @Column({ type: 'varchar', length: 100, nullable: true })
+  guestName: string | null;
+
+  @Column({ type: 'varchar', length: 150, nullable: true })
+  guestEmail: string | null;
 
   @Column({ type: 'varchar', length: 200 })
   subject: string;

@@ -9,6 +9,7 @@ import { Repository, Raw } from 'typeorm';
 import { Friendship } from './entities/friendship.entity';
 import { FriendshipStatus } from './enums/friendship-status.enum';
 import { User } from '../users/entities/user.entity';
+import { BlocksService } from '../blocks/blocks.service';
 
 function toPublicUser(user: User) {
   const { id, nick, rank, image, totalChipsDeposited } = user;
@@ -22,6 +23,7 @@ export class FriendsService {
     private friendshipRepository: Repository<Friendship>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    private blocksService: BlocksService,
   ) {}
 
   private async findUserByNick(nick: string): Promise<User> {
@@ -55,6 +57,10 @@ export class FriendsService {
     const target = await this.findUserByNick(targetNick);
     if (target.id === requesterId) {
       throw new BadRequestException('No puedes agregarte a ti mismo como amigo');
+    }
+
+    if (await this.blocksService.isBlockedEitherDirection(requesterId, target.id)) {
+      throw new ForbiddenException('No puedes enviar una solicitud a este usuario');
     }
 
     const existing = await this.findPairEitherDirection(requesterId, target.id);

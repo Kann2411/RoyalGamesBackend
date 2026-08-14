@@ -1,9 +1,11 @@
 import {
   Controller,
   Put,
+  Post,
   Get,
   Body,
   Param,
+  Headers,
   HttpCode,
   HttpStatus,
   ParseUUIDPipe,
@@ -14,13 +16,16 @@ import {
   ApiOperation,
   ApiResponse,
   ApiParam,
+  ApiBearerAuth,
 } from '@nestjs/swagger';
 import { ChipsService } from './chips.service';
 import { ChipsTransactionDto } from './dtos/chips-transaction.dto';
+import { GiftChipsDto } from './dtos/gift-chips.dto';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '../../common/enums/role.enum';
+import { resolveGameSlugFromOrigin } from '../../common/constants/game-origins';
 
 @ApiTags('Chips')
 @Controller()
@@ -38,9 +43,16 @@ export class ChipsController {
   @ApiOperation({ summary: 'Add chips to user (called by admins and by the external games)' })
   @ApiResponse({ status: 200, description: 'Chips added successfully' })
   @ApiResponse({ status: 404, description: 'User not found' })
-  async addChips(@Body() chipsTransactionDto: ChipsTransactionDto, @CurrentUser() user: any) {
+  async addChips(
+    @Body() chipsTransactionDto: ChipsTransactionDto,
+    @CurrentUser() user: any,
+    @Headers('origin') origin?: string,
+    @Headers('referer') referer?: string,
+  ) {
     const source = user?.role === Role.ADMIN ? 'admin' : 'game';
-    return this.chipsService.addChips(chipsTransactionDto, source);
+    const refererOrigin = referer ? referer.split('/').slice(0, 3).join('/') : undefined;
+    const game = resolveGameSlugFromOrigin(origin) || resolveGameSlugFromOrigin(refererOrigin);
+    return this.chipsService.addChips(chipsTransactionDto, source, game);
   }
 
   @Put('remove/chips')
@@ -53,6 +65,21 @@ export class ChipsController {
   async removeChips(@Body() chipsTransactionDto: ChipsTransactionDto, @CurrentUser() user: any) {
     const source = user?.role === Role.ADMIN ? 'admin' : 'game';
     return this.chipsService.removeChips(chipsTransactionDto, source);
+  }
+
+  // Real chip-to-chip transfer between two logged-in users (the profile's "Regalar Fichas"
+  // action). Unlike add/remove above, the sender is always the authenticated caller — never
+  // trusted from the request body — so this can't be used to drain an arbitrary account.
+  @Post('chips/gift')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Gift chips from the current user to another user' })
+  @ApiResponse({ status: 200, description: 'Chips transferred successfully' })
+  @ApiResponse({ status: 400, description: 'Insufficient chips or invalid amount' })
+  @ApiResponse({ status: 404, description: 'Recipient not found' })
+  async giftChips(@Body() dto: GiftChipsDto, @CurrentUser() user: any) {
+    return this.chipsService.giftChips(user.id, dto.toUserId, dto.amount);
   }
 
   @Get('chips/history')

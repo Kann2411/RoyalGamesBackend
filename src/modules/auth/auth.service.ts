@@ -9,6 +9,7 @@ import { PasswordResetToken } from './entities/password-reset-token.entity';
 import { PasswordUtils } from '../../common/utils/password.utils';
 import { LoginDto } from './dtos/login.dto';
 import { MailingService } from '../mailing/mailing.service';
+import { DEFAULT_AVATAR_BUFFER, DEFAULT_AVATAR_MIME, DEFAULT_AVATAR_DATA } from '../../common/constants/default-avatar';
 
 const RESET_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour
 const FRONTEND_URL = process.env.FRONTEND_URL || 'https://royalgames.lat';
@@ -131,6 +132,13 @@ export class AuthService {
         image: picture || undefined,
         chips: 0,
         firstChips: false,
+        // Only fall back to the baked-in default avatar when Google didn't hand us a
+        // real profile picture — never overrides the user's own photo.
+        ...(picture ? {} : {
+          avatarBin: DEFAULT_AVATAR_BUFFER,
+          avatarMime: DEFAULT_AVATAR_MIME,
+          avatarData: DEFAULT_AVATAR_DATA,
+        }),
       });
 
       user = await this.usersRepository.save(user);

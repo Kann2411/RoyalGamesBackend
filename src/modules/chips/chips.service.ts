@@ -1,10 +1,10 @@
 import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
+import { Repository, DataSource } from 'typeorm';
 import { ChipsTransactionDto } from './dtos/chips-transaction.dto';
 import { ChipsRepository } from './repositories/chips.repository';
 import { User } from '../users/entities/user.entity';
-import { ChipsAwardSource } from './entities/chips-award.entity';
+import { ChipsAward, ChipsAwardSource } from './entities/chips-award.entity';
 import { Pay } from '../payments/entities/pay.entity';
 
 @Injectable()
@@ -13,11 +13,14 @@ export class ChipsService {
     private chipsRepository: ChipsRepository,
     @InjectRepository(Pay)
     private paysRepository: Repository<Pay>,
+    @InjectDataSource()
+    private dataSource: DataSource,
   ) {}
 
   async addChips(
     chipsTransactionDto: ChipsTransactionDto,
     source: ChipsAwardSource = 'game',
+    game: string | null = null,
   ): Promise<Partial<User>> {
     const currentChips = await this.chipsRepository.getChips(
       chipsTransactionDto.userId,
@@ -36,7 +39,7 @@ export class ChipsService {
       throw new NotFoundException('User not found');
     }
 
-    await this.chipsRepository.logAward(chipsTransactionDto.userId, chipsTransactionDto.amount, source);
+    await this.chipsRepository.logAward(chipsTransactionDto.userId, chipsTransactionDto.amount, source, source === 'game' ? game : null);
 
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;
@@ -78,6 +81,46 @@ export class ChipsService {
     return userWithoutPassword;
   }
 
+  /**
+   * Direct chips transfer between two real users (the "Regalar Fichas" profile action).
+   * Runs inside a DB transaction with row locks so two simultaneous gifts from the same
+   * sender can't both read a stale balance and overdraw it.
+   */
+  async giftChips(fromUserId: string, toUserId: string, amount: number): Promise<{ fromChips: number; toChips: number }> {
+    if (fromUserId === toUserId) {
+      throw new BadRequestException('No puedes regalarte fichas a ti mismo');
+    }
+    if (!Number.isInteger(amount) || amount < 1) {
+      throw new BadRequestException('Monto inválido');
+    }
+
+    return this.dataSource.manager.transaction(async (manager) => {
+      const sender = await manager.findOne(User, { where: { id: fromUserId }, lock: { mode: 'pessimistic_write' } });
+      if (!sender) {
+        throw new NotFoundException('Usuario no encontrado');
+      }
+      const receiver = await manager.findOne(User, { where: { id: toUserId }, lock: { mode: 'pessimistic_write' } });
+      if (!receiver) {
+        throw new NotFoundException('Usuario destinatario no encontrado');
+      }
+
+      const senderChips = Number(sender.chips) || 0;
+      if (senderChips < amount) {
+        throw new BadRequestException('No tienes fichas suficientes');
+      }
+
+      sender.chips = senderChips - amount;
+      receiver.chips = (Number(receiver.chips) || 0) + amount;
+      await manager.save(sender);
+      await manager.save(receiver);
+
+      await manager.save(ChipsAward, manager.create(ChipsAward, { userId: fromUserId, amount: -amount, source: 'gift' }));
+      await manager.save(ChipsAward, manager.create(ChipsAward, { userId: toUserId, amount, source: 'gift' }));
+
+      return { fromChips: sender.chips, toChips: receiver.chips };
+    });
+  }
+
   async getChips(userId: string): Promise<{ chips: number }> {
     const chips = await this.chipsRepository.getChips(userId);
     if (chips === null) {
@@ -109,7 +152,14 @@ export class ChipsService {
 
     const awardEntries = awards.map((award) => ({
       id: award.id,
-      type: award.source === 'welcome' ? 'welcome' : 'admin_adjustment',
+      type:
+        award.source === 'welcome'
+          ? 'welcome'
+          : award.source === 'gift'
+            ? (Number(award.amount) < 0 ? 'gift_sent' : 'gift_received')
+            : award.source === 'prize'
+              ? 'prize'
+              : 'admin_adjustment',
       chips: Number(award.amount),
       price: null,
       paymentPlatform: null,

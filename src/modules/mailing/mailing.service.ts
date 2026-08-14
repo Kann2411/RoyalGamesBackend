@@ -2,6 +2,12 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as nodemailer from 'nodemailer';
 import { SendMailDto } from './dtos/send-mail.dto';
 
+interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
 @Injectable()
 export class MailingService {
   private readonly logger = new Logger(MailingService.name);
@@ -17,14 +23,17 @@ export class MailingService {
     });
   }
 
-  async sendMail(sendMailDto: SendMailDto): Promise<any> {
+  async sendMail(sendMailDto: SendMailDto & { attachments?: MailAttachment[] }): Promise<any> {
     try {
-      const mailOptions = {
+      const mailOptions: any = {
         from: process.env.SMTP_USER,
         to: sendMailDto.to,
         subject: sendMailDto.subject,
         html: sendMailDto.html,
       };
+      if (sendMailDto.attachments?.length) {
+        mailOptions.attachments = sendMailDto.attachments;
+      }
 
       const info = await this.transporter.sendMail(mailOptions);
       this.logger.log(`Email sent: ${info.response}`);

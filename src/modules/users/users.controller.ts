@@ -32,6 +32,7 @@ import { UsersService } from './users.service';
 import { UpdateAvatarDto } from './dtos/update-avatar.dto';
 import { CreateUserDto } from './dtos/create-user.dto';
 import { UpdateUserDto } from './dtos/update-user.dto';
+import { ChangePasswordDto } from './dtos/change-password.dto';
 import { ManageUserDto } from './dtos/manage-user.dto';
 import { AdminUserDto } from './dtos/admin-user.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -139,6 +140,26 @@ export class UsersController {
     }
     console.log(updateUserDto);
     return this.usersService.updateUser(userId, updateUserDto);
+  }
+
+  @Patch('users/:userId/password')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Change my own password (requires current password)' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Password changed successfully' })
+  @ApiResponse({ status: 400, description: 'Current password is incorrect' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Cannot change another user password' })
+  async changePassword(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() dto: ChangePasswordDto,
+    @CurrentUser() user: any,
+  ) {
+    if (user.id !== userId) {
+      throw new ForbiddenException('Cannot change another user password');
+    }
+    await this.usersService.changePassword(userId, dto.currentPassword, dto.newPassword);
+    return { message: 'Password changed successfully' };
   }
 
   @Delete('user-delete/:userId')

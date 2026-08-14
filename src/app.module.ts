@@ -14,6 +14,9 @@ import { MessagesModule } from './modules/messages/messages.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { LeaderboardModule } from './modules/leaderboard/leaderboard.module';
 import { SupportModule } from './modules/support/support.module';
+import { BlocksModule } from './modules/blocks/blocks.module';
+import { PrizesModule } from './modules/prizes/prizes.module';
+import { CareersModule } from './modules/careers/careers.module';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 
@@ -46,6 +49,9 @@ import { AppService } from './app.service';
     AdminModule,
     LeaderboardModule,
     SupportModule,
+    BlocksModule,
+    PrizesModule,
+    CareersModule,
   ],
   controllers: [AppController],
   providers: [AppService],
