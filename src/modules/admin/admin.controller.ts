@@ -27,4 +27,10 @@ export class AdminController {
     const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 500) : 200;
     return this.adminService.getDeposits(limit);
   }
+
+  @Get('referrals')
+  @ApiOperation({ summary: 'Referral tracking: who referred whom and their deposit status (Admin only)' })
+  async getReferrals() {
+    return this.adminService.getReferrals();
+  }
 }

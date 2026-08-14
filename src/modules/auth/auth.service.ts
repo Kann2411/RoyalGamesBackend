@@ -124,6 +124,13 @@ export class AuthService {
         counter++;
       }
 
+      // Todo usuario necesita su propio código para poder referir a otros, incluidos
+      // los que se registran con Google (que no pasan por UsersService.createUser).
+      let referralCode: string;
+      do {
+        referralCode = crypto.randomBytes(4).toString('hex').toUpperCase();
+      } while (await this.usersRepository.findOne({ where: { referralCode } }));
+
       user = this.usersRepository.create({
         email: emailLower,
         nick,
@@ -132,6 +139,7 @@ export class AuthService {
         image: picture || undefined,
         chips: 0,
         firstChips: false,
+        referralCode,
         // Only fall back to the baked-in default avatar when Google didn't hand us a
         // real profile picture — never overrides the user's own photo.
         ...(picture ? {} : {

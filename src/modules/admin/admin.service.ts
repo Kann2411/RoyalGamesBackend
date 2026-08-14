@@ -82,6 +82,35 @@ export class AdminService {
     };
   }
 
+  /**
+   * Referral tracking for the admin: who referred whom, and whether/how much the referred
+   * user has deposited so far. Rewards to the referrer are NOT automatic (could be a real
+   * payment for an employee, etc.) — this is purely the record an admin needs to decide and
+   * pay them manually.
+   */
+  async getReferrals() {
+    return this.usersRepository.query(`
+      SELECT
+        ref.nick AS "referrerNick",
+        ref."referralCode" AS "referrerCode",
+        u.id AS "referredId",
+        u.nick AS "referredNick",
+        u."createdAt" AS "referredSignupAt",
+        first_dep."createdAt" AS "firstDepositAt",
+        first_dep.chips AS "firstDepositChips"
+      FROM users u
+      JOIN users ref ON ref.id = u."referredBy"
+      LEFT JOIN LATERAL (
+        SELECT p.chips, p."createdAt"
+        FROM pays p
+        WHERE p."userId" = u.id AND p.status = 'approved'
+        ORDER BY p."createdAt" ASC
+        LIMIT 1
+      ) first_dep ON true
+      ORDER BY u."createdAt" DESC
+    `);
+  }
+
   /** Full deposit log for the admin panel: every payment record, any status, all users. */
   async getDeposits(limit = 200) {
     return this.paysRepository.query(

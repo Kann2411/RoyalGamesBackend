@@ -13,6 +13,9 @@ import { Role } from '../../common/enums/role.enum';
 import { RankTier } from '../../common/enums/rank-tier.enum';
 import { ChipsAward } from '../chips/entities/chips-award.entity';
 import { DEFAULT_AVATAR_BUFFER, DEFAULT_AVATAR_MIME, DEFAULT_AVATAR_DATA } from '../../common/constants/default-avatar';
+import * as crypto from 'crypto';
+
+const REFERRAL_SIGNUP_BONUS = 1000000;
 
 @Injectable()
 export class UsersService {
@@ -28,7 +31,19 @@ export class UsersService {
     );
   }
 
+  private async generateUniqueReferralCode(): Promise<string> {
+    let code: string;
+    let existing: User | null;
+    do {
+      code = crypto.randomBytes(4).toString('hex').toUpperCase();
+      existing = await this.usersRepository.findByReferralCode(code);
+    } while (existing);
+    return code;
+  }
+
   async createUser(createUserDto: CreateUserDto): Promise<Partial<User> & { firstChipsReceived: boolean }> {
+    const { referredByCode, ...userData } = createUserDto;
+
     const emailLowerCase = createUserDto.email.toLowerCase();
     const existingEmail = await this.usersRepository.findByEmail(
       emailLowerCase,
@@ -48,9 +63,21 @@ export class UsersService {
       createUserDto.password,
     );
 
+    const referralCode = await this.generateUniqueReferralCode();
+
+    // Invalid/unknown codes are ignored rather than rejected — a typo in a friend's code
+    // shouldn't block someone from signing up.
+    let referredBy: string | null = null;
+    if (referredByCode) {
+      const referrer = await this.usersRepository.findByReferralCode(referredByCode.trim().toUpperCase());
+      if (referrer) {
+        referredBy = referrer.id;
+      }
+    }
+
     // Create user without initial chips
     const user = await this.usersRepository.create({
-      ...createUserDto,
+      ...userData,
       email: emailLowerCase,
       password: hashedPassword,
       chips: 0,
@@ -58,6 +85,8 @@ export class UsersService {
       avatarBin: DEFAULT_AVATAR_BUFFER,
       avatarMime: DEFAULT_AVATAR_MIME,
       avatarData: DEFAULT_AVATAR_DATA,
+      referralCode,
+      referredBy,
     });
 
     // Grant first chips atomically (only for first 100 users)
@@ -67,8 +96,17 @@ export class UsersService {
       await this.logWelcomeBonus(user.id, 1000000);
     }
 
+    // Separate, uncapped bonus for signing up through a valid referral code — on top of,
+    // not instead of, the first-100-users welcome bonus above.
+    if (referredBy) {
+      await this.usersRepository.addChipsAtomic(user.id, REFERRAL_SIGNUP_BONUS);
+      await this.chipsAwardRepository.save(
+        this.chipsAwardRepository.create({ userId: user.id, amount: REFERRAL_SIGNUP_BONUS, source: 'referral' }),
+      );
+    }
+
     // Fetch updated user with chips
-    const userToReturn = updatedUser || await this.usersRepository.findById(user.id);
+    const userToReturn = await this.usersRepository.findById(user.id);
     if (!userToReturn) {
       throw new NotFoundException('User not found');
     }
@@ -104,8 +142,10 @@ export class UsersService {
 
     // Password changes must go through changePassword() (current-password check + hashing).
     // Silently dropping it here — instead of trusting the DTO — is what stops a raw, unhashed
-    // password from ever reaching this generic profile-update path.
-    const { password: _ignoredPassword, ...safeUpdateDto } = updateUserDto as any;
+    // password from ever reaching this generic profile-update path. referredByCode is a
+    // signup-only field with no matching column, dropped here too so it can never leak into
+    // an UPDATE statement.
+    const { password: _ignoredPassword, referredByCode: _ignoredReferredByCode, ...safeUpdateDto } = updateUserDto as any;
 
     const updatedUser = await this.usersRepository.update(id, safeUpdateDto);
     if (!updatedUser) {

@@ -159,7 +159,9 @@ export class ChipsService {
             ? (Number(award.amount) < 0 ? 'gift_sent' : 'gift_received')
             : award.source === 'prize'
               ? 'prize'
-              : 'admin_adjustment',
+              : award.source === 'referral'
+                ? 'referral'
+                : 'admin_adjustment',
       chips: Number(award.amount),
       price: null,
       paymentPlatform: null,

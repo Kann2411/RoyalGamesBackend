@@ -26,6 +26,10 @@ export class UsersRepository {
     });
   }
 
+  async findByReferralCode(code: string): Promise<User | null> {
+    return this.repository.findOne({ where: { referralCode: code } });
+  }
+
   async findAll(): Promise<User[]> {
     return this.repository.find();
   }
@@ -89,6 +93,23 @@ export class UsersRepository {
       where: { id },
       relations: ['payments'],
     });
+  }
+
+  /** Straight atomic increment, used for the one-time referral signup bonus. */
+  async addChipsAtomic(userId: string, amount: number): Promise<User | null> {
+    const result = await this.repository.query(
+      `UPDATE users SET chips = chips + $1 WHERE id = $2 RETURNING *`,
+      [amount, userId],
+    );
+    let row: any = null;
+    if (Array.isArray(result)) {
+      if (Array.isArray(result[0]) && result[0].length > 0) {
+        row = result[0][0];
+      } else if (result.length > 0 && typeof result[0] === 'object' && !Array.isArray(result[0]) && Object.keys(result[0]).length > 0) {
+        row = result[0];
+      }
+    }
+    return (row && row.id) ? (row as User) : null;
   }
 
   /**

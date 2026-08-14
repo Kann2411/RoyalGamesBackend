@@ -40,4 +40,9 @@ export class CreateUserDto {
   @IsOptional()
   @IsString()
   avatar?: string;
+
+  @ApiProperty({ example: 'A1B2C3D4', description: 'Referral code of whoever invited this user', required: false })
+  @IsOptional()
+  @IsString()
+  referredByCode?: string;
 }
