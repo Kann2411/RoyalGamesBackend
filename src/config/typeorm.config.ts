@@ -14,7 +14,7 @@ const config = {
   autoLoadEntities: true,
   dropSchema: false,
   synchronize: false,
-  logging: process.env.NODE_ENV === 'development',
+  logging: false,
   ssl:
     (process.env.DB_SSL || 'false').toLowerCase() === 'true'
       ? { rejectUnauthorized: false }

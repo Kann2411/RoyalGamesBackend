@@ -21,9 +21,7 @@ import {
 } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import {
-  CreateOrderDto,
   CreateMercadoPagoOrderDto,
-  CreateMpPreferenceDto,
   CreatePayPalOrderDto,
   CapturePayPalOrderDto,
 } from './dtos/create-payment.dto';
@@ -37,21 +35,6 @@ import { CurrentUser } from '../../common/decorators/current-user.decorator';
 @Controller()
 export class PaymentsController {
   constructor(private paymentsService: PaymentsService) { }
-
-  // ============= UNIFIED MERCADOPAGO CREATION =============
-  @Post('create-order')
-  @HttpCode(HttpStatus.CREATED)
-  @UseGuards(JwtAuthGuard)
-  @ApiOperation({
-    summary: 'Create a MercadoPago order',
-    description: 'Creates a MercadoPago order with automatic currency detection based on user country.',
-  })
-  @ApiResponse({ status: 201, description: 'Order created successfully' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  @ApiResponse({ status: 400, description: 'Invalid request' })
-  async createMercadoPagoOrderUnified(@Body() createOrderDto: CreateOrderDto) {
-    return this.paymentsService.createMercadoPagoOrderUnified(createOrderDto);
-  }
 
   // ============= MERCADOPAGO =============
   @Post('mepago/create-order')
@@ -77,13 +60,10 @@ export class PaymentsController {
   @ApiOperation({ summary: 'MercadoPago webhook' })
   async handleMercadoPagoWebhook(
     @Body() data: any,
-    @Query('id') merchantOrderId?: string,
+    @Query('id') id?: string,
     @Query('topic') topic?: string,
   ) {
-    await this.paymentsService.handleMercadoPagoWebhook(data, {
-      merchantOrderId,
-      topic,
-    });
+    await this.paymentsService.handleMercadoPagoWebhook(data, { id, topic });
     return { status: 'received' };
   }
 
@@ -124,44 +104,6 @@ export class PaymentsController {
       ? `${frontendUrl}/mercadopago/pending?id=${id ?? ''}&userId=${userId ?? ''}`
       : `${frontendUrl}/mercadopago/pending`;
     return res.redirect(301, redirectTo);
-  }
-
-  // ─── Nuevos endpoints estilo El_Gaalpon_de_Jose ───────────────────────────
-
-  @Post('mercadopago/create_preference')
-  @HttpCode(HttpStatus.CREATED)
-  @UseGuards(JwtAuthGuard)
-  @ApiOperation({
-    summary: 'Create MercadoPago preference (El_Gaalpon style)',
-    description:
-      'Acepta title, quantity, unit_price, currency_id, userId y chips opcional. ' +
-      'Retorna { preferenceId, initPoint, redirectUrl }.',
-  })
-  @ApiResponse({ status: 201, description: 'Preference created successfully' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  @ApiResponse({ status: 400, description: 'Invalid request or unsupported currency' })
-  async createMpPreference(@Body() dto: CreateMpPreferenceDto) {
-    return this.paymentsService.createMpPreference(dto);
-  }
-
-  @Post('mercadopago/payment')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'MercadoPago alternative webhook (El_Gaalpon style)',
-    description:
-      'MercadoPago llama a esta ruta con ?id=&userId=&pagoId= tras completar un pago. ' +
-      'Delega el procesamiento al webhook principal.',
-  })
-  async handleMercadoPagoPayment(
-    @Query('id') id?: string,
-    @Query('userId') userId?: string,
-    @Query('pagoId') pagoId?: string,
-  ) {
-    return this.paymentsService.handleMercadoPagoPaymentWebhook(
-      id ?? '',
-      userId ?? '',
-      pagoId ?? '',
-    );
   }
 
   // ============= PAYPAL =============
