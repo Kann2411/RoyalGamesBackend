@@ -13,6 +13,7 @@ import { Role } from '../../common/enums/role.enum';
 import { RankTier } from '../../common/enums/rank-tier.enum';
 import { ChipsAward } from '../chips/entities/chips-award.entity';
 import { DEFAULT_AVATAR_BUFFER, DEFAULT_AVATAR_MIME, DEFAULT_AVATAR_DATA } from '../../common/constants/default-avatar';
+import { MailingService } from '../mailing/mailing.service';
 import * as crypto from 'crypto';
 
 const REFERRAL_SIGNUP_BONUS = 1000000;
@@ -23,6 +24,7 @@ export class UsersService {
     private usersRepository: UsersRepository,
     @InjectRepository(ChipsAward)
     private chipsAwardRepository: Repository<ChipsAward>,
+    private mailingService: MailingService,
   ) {}
 
   private async logWelcomeBonus(userId: string, amount: number): Promise<void> {
@@ -169,6 +171,62 @@ export class UsersService {
     }
     const hashedPassword = await PasswordUtils.hashPassword(newPassword);
     await this.usersRepository.update(id, { password: hashedPassword });
+  }
+
+  /**
+   * Admin-initiated password reset for a user who's locked out and can't use the normal
+   * forgot-password email flow (lost access to that inbox too, etc). No current-password
+   * check — the admin's own auth is the gate here — but we notify the account's email so an
+   * unnoticed takeover isn't silent if this wasn't actually requested by the owner.
+   */
+  async adminSetPassword(userId: string, newPassword: string): Promise<void> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const hashedPassword = await PasswordUtils.hashPassword(newPassword);
+    await this.usersRepository.update(userId, { password: hashedPassword });
+
+    this.mailingService
+      .sendMail({
+        to: user.email,
+        subject: 'Tu contraseña fue restablecida - RoyalGames',
+        html: `<h2>Hola ${user.nick}</h2><p>Un administrador restableció la contraseña de tu cuenta. Si no lo solicitaste vos, contactá a soporte de inmediato.</p>`,
+      })
+      .catch(() => {});
+  }
+
+  /**
+   * Admin-initiated email change, for the same lost-access scenario as adminSetPassword.
+   * Notifies the NEW address (the old one may be exactly what's unreachable).
+   */
+  async adminSetEmail(userId: string, newEmail: string): Promise<Partial<User>> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const emailLower = newEmail.toLowerCase();
+    if (emailLower !== user.email) {
+      const existing = await this.usersRepository.findByEmail(emailLower);
+      if (existing) {
+        throw new ConflictException('Email already exists');
+      }
+    }
+    const updatedUser = await this.usersRepository.update(userId, { email: emailLower });
+    if (!updatedUser) {
+      throw new NotFoundException('User not found');
+    }
+
+    this.mailingService
+      .sendMail({
+        to: emailLower,
+        subject: 'Tu correo fue actualizado - RoyalGames',
+        html: `<h2>Hola ${user.nick}</h2><p>Un administrador vinculó este correo a tu cuenta de RoyalGames. Si no lo solicitaste vos, contactá a soporte de inmediato.</p>`,
+      })
+      .catch(() => {});
+
+    const { password, ...userWithoutPassword } = updatedUser;
+    return userWithoutPassword;
   }
 
   async deleteUser(id: string): Promise<void> {

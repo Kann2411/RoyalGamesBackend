@@ -33,6 +33,8 @@ import { UpdateAvatarDto } from './dtos/update-avatar.dto';
 import { CreateUserDto } from './dtos/create-user.dto';
 import { UpdateUserDto } from './dtos/update-user.dto';
 import { ChangePasswordDto } from './dtos/change-password.dto';
+import { AdminSetEmailDto } from './dtos/admin-set-email.dto';
+import { AdminSetPasswordDto } from './dtos/admin-set-password.dto';
 import { ManageUserDto } from './dtos/manage-user.dto';
 import { AdminUserDto } from './dtos/admin-user.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -210,6 +212,36 @@ export class UsersController {
   @ApiResponse({ status: 404, description: 'User not found' })
   async setUserAdmin(@Body() adminUserDto: AdminUserDto) {
     return this.usersService.setUserAdmin(adminUserDto);
+  }
+
+  @Patch('admin/users/:userId/email')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Change another user's email (Admin only, for account recovery)" })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Email updated successfully' })
+  @ApiResponse({ status: 409, description: 'Email already in use' })
+  async adminSetEmail(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() dto: AdminSetEmailDto,
+  ) {
+    return this.usersService.adminSetEmail(userId, dto.email);
+  }
+
+  @Patch('admin/users/:userId/password')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Reset another user's password (Admin only, for account recovery)" })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Password updated successfully' })
+  async adminSetPassword(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() dto: AdminSetPasswordDto,
+  ) {
+    await this.usersService.adminSetPassword(userId, dto.newPassword);
+    return { message: 'Password updated successfully' };
   }
 
   @Put('firstchips/:userId')

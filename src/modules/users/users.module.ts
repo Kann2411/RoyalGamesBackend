@@ -5,9 +5,10 @@ import { ChipsAward } from '../chips/entities/chips-award.entity';
 import { UsersController } from './users.controller';
 import { UsersService } from './users.service';
 import { UsersRepository } from './repositories/users.repository';
+import { MailingModule } from '../mailing/mailing.module';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([User, ChipsAward])],
+  imports: [TypeOrmModule.forFeature([User, ChipsAward]), MailingModule],
   controllers: [UsersController],
   providers: [UsersService, UsersRepository],
   exports: [UsersService, UsersRepository],
