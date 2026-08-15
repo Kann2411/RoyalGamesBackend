@@ -9,7 +9,7 @@ import { Role } from '../../common/enums/role.enum';
 @ApiTags('Admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
+@Roles(Role.ADMIN, Role.MOD)
 @Controller('admin')
 export class AdminController {
   constructor(private adminService: AdminService) {}

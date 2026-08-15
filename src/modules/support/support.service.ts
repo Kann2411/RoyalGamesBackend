@@ -38,7 +38,8 @@ export class SupportService {
   }
 
   private assertCanAccess(ticket: SupportTicket, requester: any): void {
-    if (ticket.userId !== requester.id && requester.role !== Role.ADMIN) {
+    const isAgent = requester.role === Role.ADMIN || requester.role === Role.MOD;
+    if (ticket.userId !== requester.id && !isAgent) {
       throw new ForbiddenException('Cannot access another user\'s ticket');
     }
   }
@@ -144,7 +145,9 @@ export class SupportService {
     const ticket = await this.findTicketOrThrow(ticketId);
     this.assertCanAccess(ticket, requester);
 
-    const isAdminReply = requester.role === Role.ADMIN;
+    // "Admin" here means "support agent" (admin or mod) for message-sender/status purposes —
+    // there's no separate sender enum value for mods, they reply under the same "Soporte" label.
+    const isAdminReply = requester.role === Role.ADMIN || requester.role === Role.MOD;
     const senderRole = isAdminReply ? TicketSender.ADMIN : TicketSender.USER;
 
     await this.messageRepository.save(

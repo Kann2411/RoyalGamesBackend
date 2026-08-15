@@ -17,7 +17,7 @@ function parsePeriod(period: string): PrizePeriod {
 @ApiTags('Prizes')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
+@Roles(Role.ADMIN, Role.MOD)
 @Controller('admin/prizes')
 export class PrizesController {
   constructor(private prizesService: PrizesService) {}

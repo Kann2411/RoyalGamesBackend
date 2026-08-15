@@ -20,12 +20,15 @@ export class RolesGuard implements CanActivate {
     const request = context.switchToHttp().getRequest();
     const user = request.user;
 
-    if (!user || user.role !== Role.ADMIN) {
+    // Was previously hardcoded to Role.ADMIN regardless of what @Roles(...) actually listed,
+    // which silently made every "admin-or-mod" style check admin-only. Now it genuinely checks
+    // membership in whatever roles the route declared.
+    if (!user || !requiredRoles.includes(user.role)) {
       throw new ForbiddenException(
         'You do not have permission to access this resource',
       );
     }
 
-    return requiredRoles.includes(Role.ADMIN);
+    return true;
   }
 }

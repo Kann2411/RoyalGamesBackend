@@ -43,7 +43,7 @@ export class SupportController {
   @Get('tickets/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiOperation({ summary: 'List every support ticket (Admin only)' })
   async listAllTickets() {
     return this.supportService.listAllTickets();
@@ -72,7 +72,7 @@ export class SupportController {
   @Patch('tickets/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @ApiBearerAuth()
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiOperation({ summary: 'Open or close a ticket (Admin only)' })
   async updateStatus(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateTicketStatusDto) {
     return this.supportService.updateStatus(id, dto.status);

@@ -60,7 +60,7 @@ export class UsersController {
 
   @Get('getUsers')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all users (Admin only)' })
   @ApiResponse({ status: 200, description: 'Users retrieved successfully' })
@@ -181,7 +181,7 @@ export class UsersController {
 
   @Delete('user-delete/:userId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete user (Admin only)' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
@@ -195,7 +195,7 @@ export class UsersController {
 
   @Put('user-ban')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ban/Unban user (Admin only)' })
@@ -207,7 +207,7 @@ export class UsersController {
 
   @Put('inactivar-user')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Inactivate/Activate user (Admin only)' })
@@ -231,7 +231,7 @@ export class UsersController {
 
   @Patch('admin/users/:userId/email')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Change another user's email (Admin only, for account recovery)" })
   @ApiParam({ name: 'userId', description: 'User UUID' })
@@ -246,7 +246,7 @@ export class UsersController {
 
   @Patch('admin/users/:userId/password')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Reset another user's password (Admin only, for account recovery)" })
   @ApiParam({ name: 'userId', description: 'User UUID' })
