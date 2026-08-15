@@ -123,6 +123,21 @@ export class UsersController {
     return this.usersService.getUserByNick(nick);
   }
 
+  @Get('check-availability')
+  @ApiOperation({
+    summary:
+      'Check whether a nick and/or email are already registered (public). Returns booleans only, never user data, so it is safe to call before signup/login.',
+  })
+  @ApiQuery({ name: 'nick', description: 'Nickname to check', required: false })
+  @ApiQuery({ name: 'email', description: 'Email to check', required: false })
+  @ApiResponse({ status: 200, description: 'Availability flags returned' })
+  async checkAvailability(
+    @Query('nick') nick?: string,
+    @Query('email') email?: string,
+  ) {
+    return this.usersService.checkAvailability(nick, email);
+  }
+
   @Patch('actualizar-usuario/:userId')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()

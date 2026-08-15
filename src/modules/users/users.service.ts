@@ -265,6 +265,27 @@ export class UsersService {
     return userWithoutPassword;
   }
 
+  /**
+   * Booleans-only lookup used by the signup form to check availability before the user
+   * has a session. Deliberately never returns user data (unlike getUserByEmail, which is
+   * kept behind JwtAuthGuard) so it can be public without exposing account details.
+   */
+  async checkAvailability(
+    nick?: string,
+    email?: string,
+  ): Promise<{ nickTaken?: boolean; emailTaken?: boolean }> {
+    const result: { nickTaken?: boolean; emailTaken?: boolean } = {};
+    if (nick) {
+      const existingNick = await this.usersRepository.findByNick(nick);
+      result.nickTaken = !!existingNick;
+    }
+    if (email) {
+      const existingEmail = await this.usersRepository.findByEmail(email.toLowerCase());
+      result.emailTaken = !!existingEmail;
+    }
+    return result;
+  }
+
   async getAllUsers(): Promise<Partial<User>[]> {
     const users = await this.usersRepository.findAll();
     return users.map(({ password, ...userWithoutPassword }) => userWithoutPassword);
