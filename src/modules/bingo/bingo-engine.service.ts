@@ -111,6 +111,16 @@ export class BingoEngineService implements OnModuleInit {
 
     if (game.state === BingoGameState.RUNNING) {
       const progress = deriveGameProgress(game, now);
+
+      // Announces winners live, in step with the same currentRound clock the client's own ball
+      // animation uses - checked every tick (including the one where the game turns out to be
+      // finished below, so the final bingo still gets announced before its BingoWinner row is
+      // deleted as part of finishing).
+      const announced = await this.bingoService.announceDueWinners(game, progress.currentRound);
+      for (const entry of announced) {
+        this.gateway.broadcastChatMessage(roomId, entry);
+      }
+
       if (progress.isFinished) {
         const result = await this.bingoService.finishGameAutomatically(game.id);
         const pool = await this.bingoService.getOrCreateSuperbingoForRoom(roomId);
