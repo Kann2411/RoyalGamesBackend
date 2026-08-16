@@ -208,30 +208,35 @@ export class BingoService {
     return created;
   }
 
-  /** The single virtual room backing the main-menu chat/presence panel. isActive stays false so
-   *  it never shows up in getRooms() (the "Salas disponibles" list) or in the engine's tick loop -
-   *  it only exists as a target for chat_send/presence over the same WS connection. */
-  async ensureLobbyRoom(): Promise<BingoRoom> {
-    const existing = await this.roomRepository.findOne({ where: { isLobby: true } });
+  /** A virtual, chat/presence-only room - isActive stays false so it never shows up in
+   *  getRooms() (the "Salas disponibles" list) or in the engine's tick loop, it only exists as a
+   *  target for chat_send/presence over the WS. `lobbyKey` distinguishes separate pseudo-rooms
+   *  (the main-menu panel uses 'bingo'; other games can get their own isolated channel by passing
+   *  a different key - ej. Minas passes 'minas'). Defaulting to 'bingo' keeps every existing
+   *  zero-argument call site (ej. bingo-engine.service.ts at boot) resolving to the exact same
+   *  row it always has. */
+  async ensureLobbyRoom(lobbyKey = 'bingo', name?: string): Promise<BingoRoom> {
+    const existing = await this.roomRepository.findOne({ where: { isLobby: true, lobbyKey } });
     if (existing) {
       return existing;
     }
 
     const room = this.roomRepository.create({
-      name: 'Lobby',
+      name: name || (lobbyKey === 'bingo' ? 'Lobby' : lobbyKey),
       type: BingoRoomType.PUBLIC,
       betAmount: 0,
       maxPlayers: 100000,
       isActive: false,
       isLobby: true,
+      lobbyKey,
       config: {},
     });
 
     return this.roomRepository.save(room);
   }
 
-  async getLobbyRoom(): Promise<BingoRoom> {
-    const room = await this.roomRepository.findOne({ where: { isLobby: true } });
+  async getLobbyRoom(lobbyKey = 'bingo'): Promise<BingoRoom> {
+    const room = await this.roomRepository.findOne({ where: { isLobby: true, lobbyKey } });
     if (!room) {
       throw new NotFoundException('Lobby room not initialized');
     }

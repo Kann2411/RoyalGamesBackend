@@ -40,6 +40,12 @@ export class BingoRoom {
   @Column({ type: 'boolean', default: false })
   isLobby: boolean;
 
+  /** Distinguishes isLobby rooms from each other (ej. 'bingo' for the main-menu panel, 'minas'
+   *  for the Minas game's own chat channel). Null for non-lobby rooms. Unique among isLobby=true
+   *  rows - see AddLobbyKeyToBingoRooms migration. */
+  @Column({ type: 'varchar', length: 40, nullable: true })
+  lobbyKey: string | null;
+
   @Column({ type: 'jsonb', nullable: true })
   config: Record<string, any>;
 
