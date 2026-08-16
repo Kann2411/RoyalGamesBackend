@@ -489,6 +489,8 @@ export class BingoService {
       }
 
       const game = await manager.findOneOrFail(BingoGame, { where: { id: gameId } });
+      const room = await manager.findOneOrFail(BingoRoom, { where: { id: game.roomId } });
+      const unitCost = Number(room.config?.chipsRequired ?? room.betAmount ?? 0);
       const pool = await this.getOrCreateSuperbingoForRoom(game.roomId, manager);
 
       const plannedDraws = this.generateRandomSequence(90);
@@ -497,8 +499,9 @@ export class BingoService {
         plannedDraws,
         pool.thresholdBall,
         Number(pool.amount),
+        unitCost,
       );
-      const prizeAmounts = this.calculatePrizeAmounts(cards.length);
+      const prizeAmounts = this.calculatePrizeAmounts(cards.length, unitCost);
 
       game.persistedSnapshot = {
         ...game.persistedSnapshot,
@@ -782,11 +785,15 @@ export class BingoService {
     await this.cardRepository.delete(invalidCardIds);
   }
 
-  private calculatePrizeAmounts(totalCards: number): { line: number; doubleLine: number; bingo: number } {
+  /** Prize pools scale with how much was actually collected (cards sold * card price), not a flat
+   *  per-card amount - línea gets 10% of that revenue, doble línea 25%, bingo 45% (the remaining
+   *  20% is the house's - superbingo is funded separately, see getOrCreateSuperbingoForRoom). */
+  private calculatePrizeAmounts(totalCards: number, unitCost: number): { line: number; doubleLine: number; bingo: number } {
+    const totalRevenue = totalCards * unitCost;
     return {
-      line: Math.max(100, totalCards * 10),
-      doubleLine: Math.max(200, totalCards * 20),
-      bingo: Math.max(500, totalCards * 50),
+      line: Math.round(totalRevenue * 0.1),
+      doubleLine: Math.round(totalRevenue * 0.25),
+      bingo: Math.round(totalRevenue * 0.45),
     };
   }
 
@@ -878,10 +885,11 @@ export class BingoService {
     plannedDraws: number[],
     superbingoThreshold: number,
     superbingoPoolAmount: number,
+    unitCost: number,
   ): { plannedEndRound: number; plannedWinnerEvents: PlannedWinnerEvent[] } {
     const drawPosition = new Map<number, number>();
     plannedDraws.forEach((value, index) => drawPosition.set(value, index + 1));
-    const prizeAmounts = this.calculatePrizeAmounts(cards.length);
+    const prizeAmounts = this.calculatePrizeAmounts(cards.length, unitCost);
 
     const perCard = cards.map((card) => {
       const rows = this.computeVisualRows(card.numbers);
@@ -1132,7 +1140,8 @@ export class BingoService {
           roundNumber: w.roundNumber,
         }));
 
-    const prizeTable = game.persistedSnapshot?.plannedPrizeAmounts ?? this.calculatePrizeAmounts(cards.length);
+    const unitCost = Number(room?.config?.chipsRequired ?? room?.betAmount ?? 0);
+    const prizeTable = game.persistedSnapshot?.plannedPrizeAmounts ?? this.calculatePrizeAmounts(cards.length, unitCost);
     const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt ?? null;
 
     return {
