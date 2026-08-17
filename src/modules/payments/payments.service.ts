@@ -7,6 +7,7 @@ import { User } from '../users/entities/user.entity';
 import { Pay } from './entities/pay.entity';
 import {
   CreateMercadoPagoOrderDto,
+  CreateMercadoPagoOrderByCountryDto,
   CreatePayPalOrderDto,
   CapturePayPalOrderDto,
 } from './dtos/create-payment.dto';
@@ -14,6 +15,15 @@ import { PaymentsRepository } from './repositories/payments.repository';
 import { MercadoPagoRepository } from './repositories/mercadopago.repository';
 import { PaymentStatus } from './enums/payment-status.enum';
 import { UsersService } from '../users/users.service';
+
+export type MercadoPagoCountry = 'ar' | 'co' | 'mx';
+
+/** Una cuenta vendedora de MercadoPago por país; cada una solo liquida en su propia moneda. */
+const MERCADOPAGO_COUNTRY_CONFIG: Record<MercadoPagoCountry, { currency: string; envVar: string }> = {
+  ar: { currency: 'ARS', envVar: 'MERCADOPAGO_ACCESS_TOKEN_AR' },
+  co: { currency: 'COP', envVar: 'MERCADOPAGO_ACCESS_TOKEN_CO' },
+  mx: { currency: 'MXN', envVar: 'MERCADOPAGO_ACCESS_TOKEN_MX' },
+};
 
 @Injectable()
 export class PaymentsService {
@@ -34,34 +44,36 @@ export class PaymentsService {
   // ============= MERCADOPAGO =============
 
   /**
-   * Ruta: POST /mepago/create-order
-   * Recibe CreateMercadoPagoOrderDto (userId, chips, price, currency).
-   * Delega la llamada a la API de MP en MercadoPagoRepository y graba el
-   * registro pendiente en BD. Retorna { orderId, initPoint }.
+   * Crea la preferencia en MercadoPago y el registro PENDIENTE en BD.
+   * Compartido por el endpoint genérico (moneda explícita del cliente) y por
+   * los endpoints por país (moneda fija según la cuenta vendedora del país).
    */
-  async createMercadoPagoOrder(
-    createMercadoPagoOrderDto: CreateMercadoPagoOrderDto,
-  ): Promise<any> {
-    const user = await this.usersRepository.findOne({
-      where: { id: createMercadoPagoOrderDto.userId },
-    });
+  private async buildAndPersistMercadoPagoOrder(params: {
+    userId: string;
+    chips: number;
+    price: string;
+    currency: string;
+    accessToken?: string;
+  }): Promise<{ orderId: string; initPoint: string }> {
+    const user = await this.usersRepository.findOne({ where: { id: params.userId } });
     if (!user) throw new NotFoundException('User not found');
 
     const preference = await this.mercadoPagoRepository.createPreference({
-      itemId: `${createMercadoPagoOrderDto.userId}-${Date.now()}`,
-      title: `Royal Games - ${createMercadoPagoOrderDto.chips} Chips`,
-      unitPrice: parseFloat(createMercadoPagoOrderDto.price),
+      itemId: `${params.userId}-${Date.now()}`,
+      title: `Royal Games - ${params.chips} Chips`,
+      unitPrice: parseFloat(params.price),
       quantity: 1,
-      currencyId: createMercadoPagoOrderDto.currency,
-      userId: createMercadoPagoOrderDto.userId,
-      chips: createMercadoPagoOrderDto.chips,
+      currencyId: params.currency,
+      userId: params.userId,
+      chips: params.chips,
+      accessToken: params.accessToken,
     });
 
     // Crear registro de pago PENDIENTE con preferenceId
     const pagoDb = this.payRepository.create({
-      userId: createMercadoPagoOrderDto.userId,
-      chips: createMercadoPagoOrderDto.chips,
-      price: createMercadoPagoOrderDto.price,
+      userId: params.userId,
+      chips: params.chips,
+      price: params.price,
       paymentPlatform: 'mepago',
       mercadoPagoPreferenceId: preference.preferenceId,
       status: PaymentStatus.PENDING,
@@ -70,14 +82,62 @@ export class PaymentsService {
     await this.paymentsRepository.create(pagoDb);
 
     // MercadoPago ya no separa "sandbox" de "producción" por URL: lo que determina
-    // si una transacción es real o de prueba es el MERCADOPAGO_ACCESS_TOKEN usado
-    // para crear la preferencia (cuenta de prueba vs. cuenta real). `sandbox_init_point`
+    // si una transacción es real o de prueba es el access token usado para crear
+    // la preferencia (cuenta de prueba vs. cuenta real). `sandbox_init_point`
     // apunta a un dominio legacy que MercadoPago ya no mantiene en paridad con la API
     // normal (ver merchant_orders 403), así que siempre usamos `init_point`.
     return {
       orderId: preference.preferenceId,
       initPoint: preference.initPoint,
     };
+  }
+
+  /**
+   * Ruta: POST /mepago/create-order
+   * Recibe CreateMercadoPagoOrderDto (userId, chips, price, currency).
+   * Usa siempre la cuenta genérica (MERCADOPAGO_ACCESS_TOKEN).
+   */
+  async createMercadoPagoOrder(
+    createMercadoPagoOrderDto: CreateMercadoPagoOrderDto,
+  ): Promise<any> {
+    return this.buildAndPersistMercadoPagoOrder({
+      userId: createMercadoPagoOrderDto.userId,
+      chips: createMercadoPagoOrderDto.chips,
+      price: createMercadoPagoOrderDto.price,
+      currency: createMercadoPagoOrderDto.currency,
+    });
+  }
+
+  /**
+   * Ruta: POST /mepago/create-order/:country (ar | co | mx)
+   * Usa la cuenta vendedora del país y fuerza su moneda real — el cliente no
+   * puede pedir una moneda que no corresponda a la cuenta que va a cobrar.
+   */
+  async createMercadoPagoOrderForCountry(
+    country: string,
+    dto: CreateMercadoPagoOrderByCountryDto,
+  ): Promise<any> {
+    const config = MERCADOPAGO_COUNTRY_CONFIG[country as MercadoPagoCountry];
+    if (!config) {
+      throw new BadRequestException(
+        `País de MercadoPago no soportado: "${country}". Usá ar, co o mx.`,
+      );
+    }
+
+    const accessToken = process.env[config.envVar];
+    if (!accessToken || accessToken.startsWith('REEMPLAZAR_')) {
+      throw new BadRequestException(
+        `La cuenta de MercadoPago para "${country}" todavía no está configurada.`,
+      );
+    }
+
+    return this.buildAndPersistMercadoPagoOrder({
+      userId: dto.userId,
+      chips: dto.chips,
+      price: dto.price,
+      currency: config.currency,
+      accessToken,
+    });
   }
 
   async handleMercadoPagoWebhook(data: any, queryParams?: any): Promise<void> {
@@ -109,114 +169,146 @@ export class PaymentsService {
   }
 
   /**
+   * Access tokens de MercadoPago configurados (cuenta genérica + una por país),
+   * sin los que todavía quedan con el placeholder sin reemplazar.
+   */
+  private getConfiguredMercadoPagoTokens(): string[] {
+    const candidates = [
+      process.env.MERCADOPAGO_ACCESS_TOKEN,
+      ...Object.values(MERCADOPAGO_COUNTRY_CONFIG).map((c) => process.env[c.envVar]),
+    ];
+    const valid = candidates.filter(
+      (token): token is string => !!token && !token.startsWith('REEMPLAZAR_'),
+    );
+    return Array.from(new Set(valid));
+  }
+
+  /**
+   * Busca un pago en MercadoPago probando cada cuenta configurada hasta que una
+   * lo reconozca. No sabemos de antemano qué cuenta (genérica, AR, CO o MX)
+   * generó un `paymentId` dado, así que probamos todas — cada cuenta solo puede
+   * ver sus propios pagos, así que las que no son dueñas simplemente fallan.
+   */
+  private async fetchMercadoPagoPayment(paymentId: string): Promise<any> {
+    const tokens = this.getConfiguredMercadoPagoTokens();
+    let lastError: unknown;
+    for (const accessToken of tokens) {
+      try {
+        const mpClient = new MercadoPagoConfig({ accessToken });
+        return await new Payment(mpClient).get({ id: paymentId });
+      } catch (err) {
+        lastError = err;
+      }
+    }
+    throw lastError ?? new Error('No hay ninguna cuenta de MercadoPago configurada');
+  }
+
+  /**
    * Procesa un pago de MercadoPago por su ID (sea que haya llegado vía IPN
    * legacy `topic=payment` o vía webhooks v2 `type=payment` en el body).
    */
   private async processMercadoPagoPayment(paymentId: string): Promise<void> {
+    let payment: any;
+    try {
+      payment = await this.fetchMercadoPagoPayment(paymentId);
+    } catch (mpError) {
+      this.logger.error('Error querying MercadoPago API:', mpError);
+      throw mpError;
+    }
+
+    if (!payment) {
+      this.logger.error('Payment not found in MercadoPago');
+      return;
+    }
+
     try {
       // Usar transacción para garantizar consistencia
       return await this.dataSource.manager.transaction(async (manager) => {
-        const mpClient = new MercadoPagoConfig({
-          accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+        const userId = payment.external_reference;
+        const chips = payment.metadata?.chips || 0;
+        const preferenceId = payment.order?.id || payment.preference_id;
+
+        if (!userId || !chips) {
+          this.logger.warn('Missing userId or chips in payment metadata');
+          return;
+        }
+
+        const user = await manager.findOne(User, { where: { id: userId } });
+        if (!user) {
+          this.logger.error(`User not found: ${userId}`);
+          return;
+        }
+
+        // Buscar pago existente por mercadoPagoPaymentId (para evitar duplicados)
+        const existingPaymentByPaymentId = await manager.findOne(Pay, {
+          where: { mercadoPagoPaymentId: payment.id },
         });
 
-        try {
-          const payment = await new Payment(mpClient).get({ id: paymentId });
+        if (existingPaymentByPaymentId) {
+          // Pago ya fue procesado
+          this.logger.debug(`Payment ${payment.id} already processed`);
+          return;
+        }
 
-          if (!payment) {
-            this.logger.error('Payment not found in MercadoPago');
-            return;
-          }
+        // Buscar pago PENDIENTE por userId + preferenceId para actualizar
+        const pendingPayment = await manager.findOne(Pay, {
+          where: {
+            userId,
+            status: PaymentStatus.PENDING,
+          },
+          order: { createdAt: 'DESC' }, // Obtener el más reciente
+        });
 
-          const userId = payment.external_reference;
-          const chips = payment.metadata?.chips || 0;
-          const preferenceId = payment.order?.id || payment.preference_id;
+        if (payment.status === 'approved') {
+          // Actualizar usuario con chips. `chips` es una columna bigint: TypeORM la
+          // devuelve como string, así que hay que castear antes de sumar (si no,
+          // `(user.chips || 0) + chips` concatena strings en vez de sumar).
+          user.chips = Number(user.chips || 0) + chips;
+          await manager.save(User, user);
+          await this.usersService.registerDeposit(userId, chips, manager);
 
-          if (!userId || !chips) {
-            this.logger.warn('Missing userId or chips in payment metadata');
-            return;
-          }
+          if (pendingPayment) {
+            // Actualizar orden pendiente existente
+            pendingPayment.status = PaymentStatus.APPROVED;
+            pendingPayment.mercadoPagoPaymentId = payment.id;
+            pendingPayment.date = new Date().toISOString();
+            await manager.save(Pay, pendingPayment);
 
-          const user = await manager.findOne(User, { where: { id: userId } });
-          if (!user) {
-            this.logger.error(`User not found: ${userId}`);
-            return;
-          }
-
-          // Buscar pago existente por mercadoPagoPaymentId (para evitar duplicados)
-          const existingPaymentByPaymentId = await manager.findOne(Pay, {
-            where: { mercadoPagoPaymentId: payment.id },
-          });
-
-          if (existingPaymentByPaymentId) {
-            // Pago ya fue procesado
-            this.logger.debug(`Payment ${payment.id} already processed`);
-            return;
-          }
-
-          // Buscar pago PENDIENTE por userId + preferenceId para actualizar
-          const pendingPayment = await manager.findOne(Pay, {
-            where: {
+            this.logger.log(`Payment approved for user ${userId}: +${chips} chips`);
+          } else {
+            // Si no hay pendiente, crear uno nuevo (por si llega webhook de payment sin crear orden primero)
+            const newPayment = manager.create(Pay, {
               userId,
-              status: PaymentStatus.PENDING,
-            },
-            order: { createdAt: 'DESC' }, // Obtener el más reciente
-          });
+              chips,
+              price: payment.transaction_amount?.toString() || '0',
+              paymentPlatform: 'mepago',
+              mercadoPagoPaymentId: payment.id,
+              mercadoPagoPreferenceId: preferenceId || payment.id,
+              status: PaymentStatus.APPROVED,
+              date: new Date().toISOString(),
+            });
+            await manager.save(Pay, newPayment);
 
-          if (payment.status === 'approved') {
-            // Actualizar usuario con chips. `chips` es una columna bigint: TypeORM la
-            // devuelve como string, así que hay que castear antes de sumar (si no,
-            // `(user.chips || 0) + chips` concatena strings en vez de sumar).
-            user.chips = Number(user.chips || 0) + chips;
-            await manager.save(User, user);
-            await this.usersService.registerDeposit(userId, chips, manager);
-
-            if (pendingPayment) {
-              // Actualizar orden pendiente existente
-              pendingPayment.status = PaymentStatus.APPROVED;
-              pendingPayment.mercadoPagoPaymentId = payment.id;
-              pendingPayment.date = new Date().toISOString();
-              await manager.save(Pay, pendingPayment);
-
-              this.logger.log(`Payment approved for user ${userId}: +${chips} chips`);
-            } else {
-              // Si no hay pendiente, crear uno nuevo (por si llega webhook de payment sin crear orden primero)
-              const newPayment = manager.create(Pay, {
-                userId,
-                chips,
-                price: payment.transaction_amount?.toString() || '0',
-                paymentPlatform: 'mepago',
-                mercadoPagoPaymentId: payment.id,
-                mercadoPagoPreferenceId: preferenceId || payment.id,
-                status: PaymentStatus.APPROVED,
-                date: new Date().toISOString(),
-              });
-              await manager.save(Pay, newPayment);
-
-              this.logger.log(
-                `Payment approved for user ${userId}: +${chips} chips (created new record)`,
-              );
-            }
-          } else if (payment.status === 'rejected') {
-            // Actualizar estado a rechazado
-            if (pendingPayment) {
-              pendingPayment.status = PaymentStatus.REJECTED;
-              pendingPayment.mercadoPagoPaymentId = payment.id;
-              await manager.save(Pay, pendingPayment);
-            }
-            this.logger.warn(`Payment rejected for user ${userId}`);
-          } else if (payment.status === 'cancelled') {
-            // Actualizar estado a cancelado
-            if (pendingPayment) {
-              pendingPayment.status = PaymentStatus.CANCELLED;
-              pendingPayment.mercadoPagoPaymentId = payment.id;
-              await manager.save(Pay, pendingPayment);
-            }
-            this.logger.warn(`Payment cancelled for user ${userId}`);
+            this.logger.log(
+              `Payment approved for user ${userId}: +${chips} chips (created new record)`,
+            );
           }
-        } catch (mpError) {
-          this.logger.error('Error querying MercadoPago API:', mpError);
-          throw mpError;
+        } else if (payment.status === 'rejected') {
+          // Actualizar estado a rechazado
+          if (pendingPayment) {
+            pendingPayment.status = PaymentStatus.REJECTED;
+            pendingPayment.mercadoPagoPaymentId = payment.id;
+            await manager.save(Pay, pendingPayment);
+          }
+          this.logger.warn(`Payment rejected for user ${userId}`);
+        } else if (payment.status === 'cancelled') {
+          // Actualizar estado a cancelado
+          if (pendingPayment) {
+            pendingPayment.status = PaymentStatus.CANCELLED;
+            pendingPayment.mercadoPagoPaymentId = payment.id;
+            await manager.save(Pay, pendingPayment);
+          }
+          this.logger.warn(`Payment cancelled for user ${userId}`);
         }
       });
     } catch (error) {

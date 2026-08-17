@@ -22,6 +22,7 @@ import {
 import { PaymentsService } from './payments.service';
 import {
   CreateMercadoPagoOrderDto,
+  CreateMercadoPagoOrderByCountryDto,
   CreatePayPalOrderDto,
   CapturePayPalOrderDto,
 } from './dtos/create-payment.dto';
@@ -53,6 +54,25 @@ export class PaymentsController {
       res.setHeader('x-mercadopago-access-token', mpToken);
     }
     return result;
+  }
+
+  @Post('mepago/create-order/:country')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Create MercadoPago order using a country-specific seller account',
+    description:
+      'country debe ser ar, co o mx. Usa la cuenta vendedora de ese país y fuerza ' +
+      'su moneda real (ARS/COP/MXN) — el body no incluye currency.',
+  })
+  @ApiParam({ name: 'country', description: 'ar | co | mx' })
+  @ApiResponse({ status: 201, description: 'Order created successfully' })
+  @ApiResponse({ status: 400, description: 'Unsupported or unconfigured country' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async createMercadoPagoOrderByCountry(
+    @Param('country') country: string,
+    @Body() dto: CreateMercadoPagoOrderByCountryDto,
+  ) {
+    return this.paymentsService.createMercadoPagoOrderForCountry(country, dto);
   }
 
   @Post('mepago/webhook')

@@ -23,6 +23,8 @@ export interface MpPreferenceInput {
   failureUrl?: string;
   pendingUrl?: string;
   notificationUrl?: string;
+  /** Access token a usar para esta preferencia; por defecto MERCADOPAGO_ACCESS_TOKEN */
+  accessToken?: string;
 }
 
 export interface MpPreferenceResult {
@@ -54,7 +56,7 @@ export class MercadoPagoRepository {
    */
   async createPreference(input: MpPreferenceInput): Promise<MpPreferenceResult> {
     const client = new MercadoPagoConfig({
-      accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
+      accessToken: input.accessToken || process.env.MERCADOPAGO_ACCESS_TOKEN,
     });
     const preferenceClient = new Preference(client);
 
