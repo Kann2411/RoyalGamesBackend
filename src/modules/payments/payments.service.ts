@@ -297,8 +297,22 @@ export class PaymentsService {
       const response = await client.execute(request);
 
       if (response.result.status === 'COMPLETED') {
+        const paymentId = response.result.id;
+
         // Usar transacción para actualizar usuario y crear pago
         return await this.dataSource.manager.transaction(async (manager) => {
+          // Idempotencia: PayPal puede devolver COMPLETED más de una vez para la misma
+          // orden (doble click, reintento de red, StrictMode en dev) sin volver a cobrarle
+          // al comprador — si ya acreditamos este orderId antes, no sumar chips de nuevo.
+          const existingPayment = await manager.findOne(Pay, {
+            where: { mercadoPagoPaymentId: paymentId },
+          });
+
+          if (existingPayment) {
+            this.logger.debug(`PayPal order ${paymentId} already captured, skipping`);
+            return response.result;
+          }
+
           const transactionUser = await manager.findOne(User, {
             where: { id: capturePayPalOrderDto.userId },
           });
@@ -313,7 +327,6 @@ export class PaymentsService {
             );
           }
 
-          const paymentId = response.result.id;
           await manager.save(
             Pay,
             manager.create(Pay, {
@@ -328,6 +341,7 @@ export class PaymentsService {
           );
 
           this.logger.log(`PayPal payment captured for user ${capturePayPalOrderDto.userId}: +${capturePayPalOrderDto.chips} chips`);
+          return response.result;
         });
       }
 
