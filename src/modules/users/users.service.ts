@@ -61,6 +61,10 @@ export class UsersService {
       throw new ConflictException('Nick already exists');
     }
 
+    // Nicks are always stored lowercase — display code re-capitalizes the first letter, so
+    // typing "USUARIO" and "usuario" must resolve to the same stored value.
+    const nickLowerCase = createUserDto.nick.toLowerCase();
+
     const hashedPassword = await PasswordUtils.hashPassword(
       createUserDto.password,
     );
@@ -80,6 +84,7 @@ export class UsersService {
     // Create user without initial chips
     const user = await this.usersRepository.create({
       ...userData,
+      nick: nickLowerCase,
       email: emailLowerCase,
       password: hashedPassword,
       chips: 0,
@@ -133,13 +138,17 @@ export class UsersService {
       updateUserDto.email = emailLowerCase;
     }
 
-    if (updateUserDto.nick && updateUserDto.nick.toLowerCase() !== user.nick.toLowerCase()) {
-      const existingNick = await this.usersRepository.findByNick(
-        updateUserDto.nick,
-      );
-      if (existingNick) {
-        throw new ConflictException('Nick already exists');
+    if (updateUserDto.nick) {
+      if (updateUserDto.nick.toLowerCase() !== user.nick.toLowerCase()) {
+        const existingNick = await this.usersRepository.findByNick(
+          updateUserDto.nick,
+        );
+        if (existingNick) {
+          throw new ConflictException('Nick already exists');
+        }
       }
+      // Nicks are always stored lowercase — display code re-capitalizes the first letter.
+      updateUserDto.nick = updateUserDto.nick.toLowerCase();
     }
 
     // Password changes must go through changePassword() (current-password check + hashing).

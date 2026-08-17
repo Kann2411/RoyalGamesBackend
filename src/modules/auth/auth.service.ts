@@ -113,7 +113,8 @@ export class AuthService {
       // Generar un nick único a partir del nombre de Google
       let baseNick = (name || email.split('@')[0])
         .replace(/[^a-zA-Z0-9_]/g, '')
-        .substring(0, 20);
+        .substring(0, 20)
+        .toLowerCase();
       if (!baseNick) baseNick = 'user';
 
       // Asegurarse de que el nick sea único
