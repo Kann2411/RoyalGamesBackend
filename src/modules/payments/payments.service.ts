@@ -6,7 +6,6 @@ import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
 import { User } from '../users/entities/user.entity';
 import { Pay } from './entities/pay.entity';
 import {
-  CreateMercadoPagoOrderDto,
   CreateMercadoPagoOrderByCountryDto,
   CreatePayPalOrderDto,
   CapturePayPalOrderDto,
@@ -43,11 +42,7 @@ export class PaymentsService {
 
   // ============= MERCADOPAGO =============
 
-  /**
-   * Crea la preferencia en MercadoPago y el registro PENDIENTE en BD.
-   * Compartido por el endpoint genérico (moneda explícita del cliente) y por
-   * los endpoints por país (moneda fija según la cuenta vendedora del país).
-   */
+  /** Crea la preferencia en MercadoPago y el registro PENDIENTE en BD. */
   private async buildAndPersistMercadoPagoOrder(params: {
     userId: string;
     chips: number;
@@ -90,22 +85,6 @@ export class PaymentsService {
       orderId: preference.preferenceId,
       initPoint: preference.initPoint,
     };
-  }
-
-  /**
-   * Ruta: POST /mepago/create-order
-   * Recibe CreateMercadoPagoOrderDto (userId, chips, price, currency).
-   * Usa siempre la cuenta genérica (MERCADOPAGO_ACCESS_TOKEN).
-   */
-  async createMercadoPagoOrder(
-    createMercadoPagoOrderDto: CreateMercadoPagoOrderDto,
-  ): Promise<any> {
-    return this.buildAndPersistMercadoPagoOrder({
-      userId: createMercadoPagoOrderDto.userId,
-      chips: createMercadoPagoOrderDto.chips,
-      price: createMercadoPagoOrderDto.price,
-      currency: createMercadoPagoOrderDto.currency,
-    });
   }
 
   /**
@@ -318,22 +297,26 @@ export class PaymentsService {
   }
 
   // ============= PAYPAL =============
+  /** Cliente de PayPal (sandbox) compartido por creación y captura de órdenes. */
+  private getPayPalClient(): InstanceType<typeof paypalCheckoutServerSdk.core.PayPalHttpClient> {
+    const environment = new paypalCheckoutServerSdk.core.SandboxEnvironment(
+      process.env.PAYPAL_CLIENT_ID,
+      process.env.PAYPAL_CLIENT_SECRET,
+    );
+    return new paypalCheckoutServerSdk.core.PayPalHttpClient(environment);
+  }
+
   async createPayPalOrder(createPayPalOrderDto: CreatePayPalOrderDto): Promise<any> {
+    const user = await this.usersRepository.findOne({
+      where: { id: createPayPalOrderDto.userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
     try {
-      const user = await this.usersRepository.findOne({
-        where: { id: createPayPalOrderDto.userId },
-      });
-
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      const environment = new paypalCheckoutServerSdk.core.SandboxEnvironment(
-        process.env.PAYPAL_CLIENT_ID,
-        process.env.PAYPAL_CLIENT_SECRET,
-      );
-
-      const client = new paypalCheckoutServerSdk.core.PayPalHttpClient(environment);
+      const client = this.getPayPalClient();
       const request = new paypalCheckoutServerSdk.orders.OrdersCreateRequest();
 
       request.prefer('return=representation');
@@ -367,21 +350,16 @@ export class PaymentsService {
   }
 
   async capturePayPalOrder(capturePayPalOrderDto: CapturePayPalOrderDto): Promise<any> {
+    const user = await this.usersRepository.findOne({
+      where: { id: capturePayPalOrderDto.userId },
+    });
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
     try {
-      const user = await this.usersRepository.findOne({
-        where: { id: capturePayPalOrderDto.userId },
-      });
-
-      if (!user) {
-        throw new NotFoundException('User not found');
-      }
-
-      const environment = new paypalCheckoutServerSdk.core.SandboxEnvironment(
-        process.env.PAYPAL_CLIENT_ID,
-        process.env.PAYPAL_CLIENT_SECRET,
-      );
-
-      const client = new paypalCheckoutServerSdk.core.PayPalHttpClient(environment);
+      const client = this.getPayPalClient();
       const request = new paypalCheckoutServerSdk.orders.OrdersCaptureRequest(
         capturePayPalOrderDto.orderId,
       );

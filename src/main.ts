@@ -6,7 +6,6 @@ import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder, OpenAPIObject } from '@nestjs/swagger';
 import morgan from 'morgan';
 import cors from 'cors';
-import MercadoPagoConfig from 'mercadopago';
 import { DataSource } from 'typeorm';
 import { WsAdapter } from '@nestjs/platform-ws';
 import { AppModule } from './app.module';
@@ -45,11 +44,6 @@ async function bootstrap() {
       console.error('Failed to synchronize database schema:', syncError);
     }
   }
-
-  // MercadoPago Configuration
-  const mercadoPagoClient = new MercadoPagoConfig({
-    accessToken: process.env.MERCADOPAGO_ACCESS_TOKEN,
-  });
 
   // Middleware
   app.use(morgan('dev'));

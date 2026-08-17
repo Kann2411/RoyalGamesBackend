@@ -21,7 +21,6 @@ import {
 } from '@nestjs/swagger';
 import { PaymentsService } from './payments.service';
 import {
-  CreateMercadoPagoOrderDto,
   CreateMercadoPagoOrderByCountryDto,
   CreatePayPalOrderDto,
   CapturePayPalOrderDto,
@@ -38,24 +37,6 @@ export class PaymentsController {
   constructor(private paymentsService: PaymentsService) { }
 
   // ============= MERCADOPAGO =============
-  @Post('mepago/create-order')
-  @HttpCode(HttpStatus.CREATED)
-  // @UseGuards(JwtAuthGuard) ------------FALTA MANEJAR EL ROL QUE ESTA EN EL TOKEN DESDE EL FRONTEND-------------
-  @ApiOperation({ summary: 'Create MercadoPago order' })
-  @ApiResponse({ status: 201, description: 'Order created successfully' })
-  @ApiResponse({ status: 404, description: 'User not found' })
-  async createMercadoPagoOrder(
-    @Body() createMercadoPagoOrderDto: CreateMercadoPagoOrderDto,
-    @Res({ passthrough: true }) res: Response,
-  ) {
-    const result = await this.paymentsService.createMercadoPagoOrder(createMercadoPagoOrderDto);
-    const mpToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
-    if (mpToken) {
-      res.setHeader('x-mercadopago-access-token', mpToken);
-    }
-    return result;
-  }
-
   @Post('mepago/create-order/:country')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({
