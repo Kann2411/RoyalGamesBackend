@@ -84,6 +84,14 @@ export class User {
   @Column({ type: 'varchar', length: 120, nullable: true })
   currentActivity: string | null;
 
+  // Code this user shares to refer others (auto-generated at signup, backfilled for old
+  // accounts). `referredBy` is the id of whoever's code THIS user entered at signup, if any.
+  @Column({ type: 'varchar', length: 12, unique: true })
+  referralCode: string;
+
+  @Column({ type: 'uuid', nullable: true })
+  referredBy: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

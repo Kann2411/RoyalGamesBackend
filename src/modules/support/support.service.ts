@@ -7,6 +7,7 @@ import { User } from '../users/entities/user.entity';
 import { TicketStatus } from './enums/ticket-status.enum';
 import { TicketSender } from './enums/ticket-sender.enum';
 import { CreateTicketDto } from './dtos/create-ticket.dto';
+import { CreateGuestTicketDto } from './dtos/create-guest-ticket.dto';
 import { MailingService } from '../mailing/mailing.service';
 import { Role } from '../../common/enums/role.enum';
 
@@ -37,7 +38,8 @@ export class SupportService {
   }
 
   private assertCanAccess(ticket: SupportTicket, requester: any): void {
-    if (ticket.userId !== requester.id && requester.role !== Role.ADMIN) {
+    const isAgent = requester.role === Role.ADMIN || requester.role === Role.MOD;
+    if (ticket.userId !== requester.id && !isAgent) {
       throw new ForbiddenException('Cannot access another user\'s ticket');
     }
   }
@@ -84,11 +86,68 @@ export class SupportService {
     return this.getTicketDetail(ticket.id, { id: userId, role: user.role });
   }
 
+  async createGuestTicket(dto: CreateGuestTicketDto) {
+    const ticket = await this.ticketRepository.save(
+      this.ticketRepository.create({
+        userId: null,
+        guestName: dto.name,
+        guestEmail: dto.email,
+        subject: dto.subject,
+        status: TicketStatus.OPEN,
+      }),
+    );
+
+    await this.messageRepository.save([
+      this.messageRepository.create({
+        ticketId: ticket.id,
+        senderId: null,
+        senderRole: TicketSender.USER,
+        content: dto.message,
+      }),
+      this.messageRepository.create({
+        ticketId: ticket.id,
+        senderId: null,
+        senderRole: TicketSender.SYSTEM,
+        content: AUTO_REPLY_TEXT,
+      }),
+    ]);
+
+    this.mailingService
+      .sendMail({
+        to: SUPPORT_EMAIL,
+        subject: `[Ticket] ${dto.subject}`,
+        html: `
+          <h2>Nuevo ticket de soporte (visitante sin cuenta)</h2>
+          <p><strong>Nombre:</strong> ${dto.name} (${dto.email})</p>
+          <p><strong>Asunto:</strong> ${dto.subject}</p>
+          <p><strong>Mensaje:</strong></p>
+          <p>${dto.message}</p>
+        `,
+      })
+      .catch((err) => this.logger.error('Failed to send guest ticket notification email', err));
+
+    this.mailingService
+      .sendMail({
+        to: dto.email,
+        subject: `[RoyalGames] Recibimos tu consulta: ${dto.subject}`,
+        html: `
+          <p>Hola ${dto.name},</p>
+          <p>${AUTO_REPLY_TEXT}</p>
+          <p>Te responderemos a este mismo correo.</p>
+        `,
+      })
+      .catch((err) => this.logger.error('Failed to send guest confirmation email', err));
+
+    return { message: 'Ticket created', ticketId: ticket.id };
+  }
+
   async addMessage(ticketId: string, requester: any, content: string) {
     const ticket = await this.findTicketOrThrow(ticketId);
     this.assertCanAccess(ticket, requester);
 
-    const isAdminReply = requester.role === Role.ADMIN;
+    // "Admin" here means "support agent" (admin or mod) for message-sender/status purposes —
+    // there's no separate sender enum value for mods, they reply under the same "Soporte" label.
+    const isAdminReply = requester.role === Role.ADMIN || requester.role === Role.MOD;
     const senderRole = isAdminReply ? TicketSender.ADMIN : TicketSender.USER;
 
     await this.messageRepository.save(
@@ -104,20 +163,33 @@ export class SupportService {
     await this.ticketRepository.save(ticket);
 
     if (!isAdminReply) {
-      const user = await this.usersRepository.findOne({ where: { id: ticket.userId } });
+      const user = ticket.userId ? await this.usersRepository.findOne({ where: { id: ticket.userId } }) : null;
       this.mailingService
         .sendMail({
           to: SUPPORT_EMAIL,
           subject: `[Ticket] Nueva respuesta: ${ticket.subject}`,
           html: `
             <h2>Nueva respuesta de usuario en un ticket</h2>
-            <p><strong>Usuario:</strong> ${user?.nick ?? ticket.userId}</p>
+            <p><strong>Usuario:</strong> ${user?.nick ?? ticket.guestName ?? ticket.userId}</p>
             <p><strong>Asunto:</strong> ${ticket.subject}</p>
             <p><strong>Mensaje:</strong></p>
             <p>${content}</p>
           `,
         })
         .catch((err) => this.logger.error('Failed to send ticket reply notification email', err));
+    } else if (!ticket.userId && ticket.guestEmail) {
+      // Guest tickets have no in-app way to see the reply — email is the only channel.
+      this.mailingService
+        .sendMail({
+          to: ticket.guestEmail,
+          subject: `[RoyalGames] Respuesta a tu consulta: ${ticket.subject}`,
+          html: `
+            <p>Hola ${ticket.guestName ?? ''},</p>
+            <p>Nuestro equipo de soporte respondió tu consulta:</p>
+            <p>${content}</p>
+          `,
+        })
+        .catch((err) => this.logger.error('Failed to send guest ticket reply email', err));
     }
 
     return this.getTicketDetail(ticketId, requester);
@@ -139,9 +211,9 @@ export class SupportService {
 
   async listAllTickets() {
     return this.ticketRepository.query(`
-      SELECT t.*, u.nick AS "userNick"
+      SELECT t.*, COALESCE(u.nick, t."guestName") AS "userNick", (t."userId" IS NULL) AS "isGuest"
       FROM support_tickets t
-      JOIN users u ON u.id = t."userId"
+      LEFT JOIN users u ON u.id = t."userId"
       ORDER BY t."updatedAt" DESC
     `);
   }

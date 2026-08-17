@@ -47,10 +47,13 @@ export class BingoController {
   }
 
   /** The main-menu chat/presence panel connects here (not a real bingo room, no games run in it).
-   *  Must stay registered before 'rooms/:id' below, or that route would swallow 'lobby' as an id. */
+   *  Must stay registered before 'rooms/:id' below, or that route would swallow 'lobby' as an id.
+   *  `key`/`name` let OTHER games get their own isolated chat/presence channel the same way (ej.
+   *  Minas calls `?key=minas&name=Minas`) - omitted, this is byte-for-byte the original Bingo
+   *  lobby lookup. */
   @Get('rooms/lobby')
-  async getLobbyRoom() {
-    const room = await this.bingoService.ensureLobbyRoom();
+  async getLobbyRoom(@Query('key') key?: string, @Query('name') name?: string) {
+    const room = await this.bingoService.ensureLobbyRoom(key || 'bingo', name);
     return { id: room.id, name: room.name };
   }
 

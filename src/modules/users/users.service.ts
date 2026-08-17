@@ -12,6 +12,11 @@ import { User } from './entities/user.entity';
 import { Role } from '../../common/enums/role.enum';
 import { RankTier } from '../../common/enums/rank-tier.enum';
 import { ChipsAward } from '../chips/entities/chips-award.entity';
+import { DEFAULT_AVATAR_BUFFER, DEFAULT_AVATAR_MIME, DEFAULT_AVATAR_DATA } from '../../common/constants/default-avatar';
+import { MailingService } from '../mailing/mailing.service';
+import * as crypto from 'crypto';
+
+const REFERRAL_SIGNUP_BONUS = 1000000;
 
 @Injectable()
 export class UsersService {
@@ -19,6 +24,7 @@ export class UsersService {
     private usersRepository: UsersRepository,
     @InjectRepository(ChipsAward)
     private chipsAwardRepository: Repository<ChipsAward>,
+    private mailingService: MailingService,
   ) {}
 
   private async logWelcomeBonus(userId: string, amount: number): Promise<void> {
@@ -27,7 +33,19 @@ export class UsersService {
     );
   }
 
+  private async generateUniqueReferralCode(): Promise<string> {
+    let code: string;
+    let existing: User | null;
+    do {
+      code = crypto.randomBytes(4).toString('hex').toUpperCase();
+      existing = await this.usersRepository.findByReferralCode(code);
+    } while (existing);
+    return code;
+  }
+
   async createUser(createUserDto: CreateUserDto): Promise<Partial<User> & { firstChipsReceived: boolean }> {
+    const { referredByCode, ...userData } = createUserDto;
+
     const emailLowerCase = createUserDto.email.toLowerCase();
     const existingEmail = await this.usersRepository.findByEmail(
       emailLowerCase,
@@ -47,13 +65,30 @@ export class UsersService {
       createUserDto.password,
     );
 
+    const referralCode = await this.generateUniqueReferralCode();
+
+    // Invalid/unknown codes are ignored rather than rejected — a typo in a friend's code
+    // shouldn't block someone from signing up.
+    let referredBy: string | null = null;
+    if (referredByCode) {
+      const referrer = await this.usersRepository.findByReferralCode(referredByCode.trim().toUpperCase());
+      if (referrer) {
+        referredBy = referrer.id;
+      }
+    }
+
     // Create user without initial chips
     const user = await this.usersRepository.create({
-      ...createUserDto,
+      ...userData,
       email: emailLowerCase,
       password: hashedPassword,
       chips: 0,
       firstChips: false,
+      avatarBin: DEFAULT_AVATAR_BUFFER,
+      avatarMime: DEFAULT_AVATAR_MIME,
+      avatarData: DEFAULT_AVATAR_DATA,
+      referralCode,
+      referredBy,
     });
 
     // Grant first chips atomically (only for first 100 users)
@@ -63,8 +98,17 @@ export class UsersService {
       await this.logWelcomeBonus(user.id, 1000000);
     }
 
+    // Separate, uncapped bonus for signing up through a valid referral code — on top of,
+    // not instead of, the first-100-users welcome bonus above.
+    if (referredBy) {
+      await this.usersRepository.addChipsAtomic(user.id, REFERRAL_SIGNUP_BONUS);
+      await this.chipsAwardRepository.save(
+        this.chipsAwardRepository.create({ userId: user.id, amount: REFERRAL_SIGNUP_BONUS, source: 'referral' }),
+      );
+    }
+
     // Fetch updated user with chips
-    const userToReturn = updatedUser || await this.usersRepository.findById(user.id);
+    const userToReturn = await this.usersRepository.findById(user.id);
     if (!userToReturn) {
       throw new NotFoundException('User not found');
     }
@@ -98,10 +142,89 @@ export class UsersService {
       }
     }
 
-    const updatedUser = await this.usersRepository.update(id, updateUserDto);
+    // Password changes must go through changePassword() (current-password check + hashing).
+    // Silently dropping it here — instead of trusting the DTO — is what stops a raw, unhashed
+    // password from ever reaching this generic profile-update path. referredByCode is a
+    // signup-only field with no matching column, dropped here too so it can never leak into
+    // an UPDATE statement.
+    const { password: _ignoredPassword, referredByCode: _ignoredReferredByCode, ...safeUpdateDto } = updateUserDto as any;
+
+    const updatedUser = await this.usersRepository.update(id, safeUpdateDto);
     if (!updatedUser) {
       throw new NotFoundException('User not found');
     }
+    const { password, ...userWithoutPassword } = updatedUser;
+    return userWithoutPassword;
+  }
+
+  async changePassword(id: string, currentPassword: string, newPassword: string): Promise<void> {
+    const user = await this.usersRepository.findById(id);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    if (!user.password) {
+      throw new BadRequestException('Esta cuenta inició sesión con Google y no tiene contraseña propia');
+    }
+    const matches = await PasswordUtils.comparePasswords(currentPassword, user.password);
+    if (!matches) {
+      throw new BadRequestException('La contraseña actual es incorrecta');
+    }
+    const hashedPassword = await PasswordUtils.hashPassword(newPassword);
+    await this.usersRepository.update(id, { password: hashedPassword });
+  }
+
+  /**
+   * Admin-initiated password reset for a user who's locked out and can't use the normal
+   * forgot-password email flow (lost access to that inbox too, etc). No current-password
+   * check — the admin's own auth is the gate here — but we notify the account's email so an
+   * unnoticed takeover isn't silent if this wasn't actually requested by the owner.
+   */
+  async adminSetPassword(userId: string, newPassword: string): Promise<void> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const hashedPassword = await PasswordUtils.hashPassword(newPassword);
+    await this.usersRepository.update(userId, { password: hashedPassword });
+
+    this.mailingService
+      .sendMail({
+        to: user.email,
+        subject: 'Tu contraseña fue restablecida - RoyalGames',
+        html: `<h2>Hola ${user.nick}</h2><p>Un administrador restableció la contraseña de tu cuenta. Si no lo solicitaste vos, contactá a soporte de inmediato.</p>`,
+      })
+      .catch(() => {});
+  }
+
+  /**
+   * Admin-initiated email change, for the same lost-access scenario as adminSetPassword.
+   * Notifies the NEW address (the old one may be exactly what's unreachable).
+   */
+  async adminSetEmail(userId: string, newEmail: string): Promise<Partial<User>> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const emailLower = newEmail.toLowerCase();
+    if (emailLower !== user.email) {
+      const existing = await this.usersRepository.findByEmail(emailLower);
+      if (existing) {
+        throw new ConflictException('Email already exists');
+      }
+    }
+    const updatedUser = await this.usersRepository.update(userId, { email: emailLower });
+    if (!updatedUser) {
+      throw new NotFoundException('User not found');
+    }
+
+    this.mailingService
+      .sendMail({
+        to: emailLower,
+        subject: 'Tu correo fue actualizado - RoyalGames',
+        html: `<h2>Hola ${user.nick}</h2><p>Un administrador vinculó este correo a tu cuenta de RoyalGames. Si no lo solicitaste vos, contactá a soporte de inmediato.</p>`,
+      })
+      .catch(() => {});
+
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;
   }
@@ -140,6 +263,27 @@ export class UsersService {
     }
     const { password, ...userWithoutPassword } = user;
     return userWithoutPassword;
+  }
+
+  /**
+   * Booleans-only lookup used by the signup form to check availability before the user
+   * has a session. Deliberately never returns user data (unlike getUserByEmail, which is
+   * kept behind JwtAuthGuard) so it can be public without exposing account details.
+   */
+  async checkAvailability(
+    nick?: string,
+    email?: string,
+  ): Promise<{ nickTaken?: boolean; emailTaken?: boolean }> {
+    const result: { nickTaken?: boolean; emailTaken?: boolean } = {};
+    if (nick) {
+      const existingNick = await this.usersRepository.findByNick(nick);
+      result.nickTaken = !!existingNick;
+    }
+    if (email) {
+      const existingEmail = await this.usersRepository.findByEmail(email.toLowerCase());
+      result.emailTaken = !!existingEmail;
+    }
+    return result;
   }
 
   async getAllUsers(): Promise<Partial<User>[]> {

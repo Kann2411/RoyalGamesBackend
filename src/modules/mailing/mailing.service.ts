@@ -1,40 +1,55 @@
 import { Injectable, Logger } from '@nestjs/common';
-import * as nodemailer from 'nodemailer';
+import axios from 'axios';
 import { SendMailDto } from './dtos/send-mail.dto';
 
+interface MailAttachment {
+  filename: string;
+  content: Buffer;
+  contentType?: string;
+}
+
+const RESEND_API_URL = 'https://api.resend.com/emails';
+
+// Render (and most PaaS free/starter tiers) block outbound SMTP ports (465/587), which made
+// direct Gmail SMTP time out silently in production even though it worked fine locally. Resend's
+// API runs over plain HTTPS (443), which isn't blocked.
 @Injectable()
 export class MailingService {
   private readonly logger = new Logger(MailingService.name);
-  private transporter: any;
+  private readonly fromAddress =
+    process.env.RESEND_FROM_EMAIL || 'RoyalGames <onboarding@resend.dev>';
 
-  constructor() {
-    this.transporter = nodemailer.createTransport({
-      service: 'gmail',
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD,
-      },
-    });
-  }
-
-  async sendMail(sendMailDto: SendMailDto): Promise<any> {
+  async sendMail(sendMailDto: SendMailDto & { attachments?: MailAttachment[] }): Promise<any> {
     try {
-      const mailOptions = {
-        from: process.env.SMTP_USER,
+      const payload: Record<string, unknown> = {
+        from: this.fromAddress,
         to: sendMailDto.to,
         subject: sendMailDto.subject,
         html: sendMailDto.html,
       };
+      if (sendMailDto.attachments?.length) {
+        payload.attachments = sendMailDto.attachments.map((att) => ({
+          filename: att.filename,
+          content: att.content.toString('base64'),
+        }));
+      }
 
-      const info = await this.transporter.sendMail(mailOptions);
-      this.logger.log(`Email sent: ${info.response}`);
+      const { data } = await axios.post(RESEND_API_URL, payload, {
+        headers: {
+          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      });
+      this.logger.log(`Email sent: ${data.id}`);
       return {
         success: true,
         message: 'Email sent successfully',
-        messageId: info.messageId,
+        messageId: data.id,
       };
     } catch (error) {
-      const msg = (error as Error).message || String(error);
+      const msg = axios.isAxiosError(error)
+        ? JSON.stringify(error.response?.data) || error.message
+        : (error as Error).message || String(error);
       this.logger.error(`Failed to send email: ${msg}`);
       return {
         success: false,

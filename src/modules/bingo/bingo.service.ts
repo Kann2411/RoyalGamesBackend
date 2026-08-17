@@ -6,7 +6,7 @@ import {
   ConflictException,
 } from '@nestjs/common';
 import { InjectRepository, InjectDataSource } from '@nestjs/typeorm';
-import { DataSource, EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, IsNull, Repository } from 'typeorm';
 import { BingoPlayer, BingoPlayerStatus } from './entities/bingo-player.entity';
 import { BingoRoom, BingoRoomType } from './entities/bingo-room.entity';
 import { BingoGame, BingoGameState } from './entities/bingo-game.entity';
@@ -208,30 +208,35 @@ export class BingoService {
     return created;
   }
 
-  /** The single virtual room backing the main-menu chat/presence panel. isActive stays false so
-   *  it never shows up in getRooms() (the "Salas disponibles" list) or in the engine's tick loop -
-   *  it only exists as a target for chat_send/presence over the same WS connection. */
-  async ensureLobbyRoom(): Promise<BingoRoom> {
-    const existing = await this.roomRepository.findOne({ where: { isLobby: true } });
+  /** A virtual, chat/presence-only room - isActive stays false so it never shows up in
+   *  getRooms() (the "Salas disponibles" list) or in the engine's tick loop, it only exists as a
+   *  target for chat_send/presence over the WS. `lobbyKey` distinguishes separate pseudo-rooms
+   *  (the main-menu panel uses 'bingo'; other games can get their own isolated channel by passing
+   *  a different key - ej. Minas passes 'minas'). Defaulting to 'bingo' keeps every existing
+   *  zero-argument call site (ej. bingo-engine.service.ts at boot) resolving to the exact same
+   *  row it always has. */
+  async ensureLobbyRoom(lobbyKey = 'bingo', name?: string): Promise<BingoRoom> {
+    const existing = await this.roomRepository.findOne({ where: { isLobby: true, lobbyKey } });
     if (existing) {
       return existing;
     }
 
     const room = this.roomRepository.create({
-      name: 'Lobby',
+      name: name || (lobbyKey === 'bingo' ? 'Lobby' : lobbyKey),
       type: BingoRoomType.PUBLIC,
       betAmount: 0,
       maxPlayers: 100000,
       isActive: false,
       isLobby: true,
+      lobbyKey,
       config: {},
     });
 
     return this.roomRepository.save(room);
   }
 
-  async getLobbyRoom(): Promise<BingoRoom> {
-    const room = await this.roomRepository.findOne({ where: { isLobby: true } });
+  async getLobbyRoom(lobbyKey = 'bingo'): Promise<BingoRoom> {
+    const room = await this.roomRepository.findOne({ where: { isLobby: true, lobbyKey } });
     if (!room) {
       throw new NotFoundException('Lobby room not initialized');
     }
@@ -489,6 +494,8 @@ export class BingoService {
       }
 
       const game = await manager.findOneOrFail(BingoGame, { where: { id: gameId } });
+      const room = await manager.findOneOrFail(BingoRoom, { where: { id: game.roomId } });
+      const unitCost = Number(room.config?.chipsRequired ?? room.betAmount ?? 0);
       const pool = await this.getOrCreateSuperbingoForRoom(game.roomId, manager);
 
       const plannedDraws = this.generateRandomSequence(90);
@@ -497,8 +504,9 @@ export class BingoService {
         plannedDraws,
         pool.thresholdBall,
         Number(pool.amount),
+        unitCost,
       );
-      const prizeAmounts = this.calculatePrizeAmounts(cards.length);
+      const prizeAmounts = this.calculatePrizeAmounts(cards.length, unitCost);
 
       game.persistedSnapshot = {
         ...game.persistedSnapshot,
@@ -606,8 +614,12 @@ export class BingoService {
     const nextGame = await this.createGame({ roomId: result.game.roomId, config: {} });
 
     if (!result.skipped) {
-      await this.recordSystemWinnerMessages(result.game, result.winners).catch((err) =>
-        this.logger.warn(`recordSystemWinnerMessages failed for game=${result.game.id}: ${(err as Error).message}`),
+      // Safety net only - by now, every winner up to plannedEndRound should already have been
+      // announced live by announceDueWinners() on a prior engine tick (processRoom checks that
+      // BEFORE deciding a game is finished). announceWinners() is idempotent, so this is a no-op
+      // unless a tick was somehow missed.
+      await this.announceWinners(result.game, result.winners).catch((err) =>
+        this.logger.warn(`announceWinners failed for game=${result.game.id}: ${(err as Error).message}`),
       );
     }
 
@@ -782,11 +794,15 @@ export class BingoService {
     await this.cardRepository.delete(invalidCardIds);
   }
 
-  private calculatePrizeAmounts(totalCards: number): { line: number; doubleLine: number; bingo: number } {
+  /** Prize pools scale with how much was actually collected (cards sold * card price), not a flat
+   *  per-card amount - línea gets 10% of that revenue, doble línea 25%, bingo 45% (the remaining
+   *  20% is the house's - superbingo is funded separately, see getOrCreateSuperbingoForRoom). */
+  private calculatePrizeAmounts(totalCards: number, unitCost: number): { line: number; doubleLine: number; bingo: number } {
+    const totalRevenue = totalCards * unitCost;
     return {
-      line: Math.max(100, totalCards * 10),
-      doubleLine: Math.max(200, totalCards * 20),
-      bingo: Math.max(500, totalCards * 50),
+      line: Math.round(totalRevenue * 0.1),
+      doubleLine: Math.round(totalRevenue * 0.25),
+      bingo: Math.round(totalRevenue * 0.45),
     };
   }
 
@@ -878,10 +894,11 @@ export class BingoService {
     plannedDraws: number[],
     superbingoThreshold: number,
     superbingoPoolAmount: number,
+    unitCost: number,
   ): { plannedEndRound: number; plannedWinnerEvents: PlannedWinnerEvent[] } {
     const drawPosition = new Map<number, number>();
     plannedDraws.forEach((value, index) => drawPosition.set(value, index + 1));
-    const prizeAmounts = this.calculatePrizeAmounts(cards.length);
+    const prizeAmounts = this.calculatePrizeAmounts(cards.length, unitCost);
 
     const perCard = cards.map((card) => {
       const rows = this.computeVisualRows(card.numbers);
@@ -1132,7 +1149,8 @@ export class BingoService {
           roundNumber: w.roundNumber,
         }));
 
-    const prizeTable = game.persistedSnapshot?.plannedPrizeAmounts ?? this.calculatePrizeAmounts(cards.length);
+    const unitCost = Number(room?.config?.chipsRequired ?? room?.betAmount ?? 0);
+    const prizeTable = game.persistedSnapshot?.plannedPrizeAmounts ?? this.calculatePrizeAmounts(cards.length, unitCost);
     const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt ?? null;
 
     return {
@@ -1350,51 +1368,67 @@ export class BingoService {
     };
   }
 
+  private static readonly WIN_TYPE_LABELS: Record<string, string> = {
+    [BingoWinType.LINE]: 'línea',
+    [BingoWinType.DOUBLE_LINE]: 'doble línea',
+    [BingoWinType.BINGO]: 'bingo',
+    [BingoWinType.SUPERBINGO]: 'superbingo',
+  };
+
+  private buildSystemWinnerMessageEntity(game: BingoGame, winner: BingoWinner, nick: string, createdAt: Date): BingoChatMessage {
+    const label = BingoService.WIN_TYPE_LABELS[winner.winType] ?? winner.winType;
+    const message = `Han cantado ${label} en la bola ${winner.roundNumber}. ${nick} ha ganado ${Number(winner.prizeAmount)} fichas por ${label.charAt(0).toUpperCase()}${label.slice(1)}.`;
+    return this.chatMessageRepository.create({
+      roomId: game.roomId,
+      playerId: winner.playerId,
+      displayName: nick,
+      role: null,
+      message,
+      type: BingoChatMessageType.SYSTEM,
+      createdAt,
+    });
+  }
+
   /**
-   * Announces every winner of a just-finished game into the room's chat history, formatted like
-   * "Han cantado linea en la bola 31. Kinora ha ganado 729000 fichas por Linea." Timestamped to
-   * when that round ACTUALLY happened (startAt + roundNumber seconds), not "now" - so it lands in
-   * the right chronological spot in history relative to real chat messages sent during the game.
-   * Not broadcast live: every already-connected client already reveals this locally, in sync with
-   * its own ball animation (see BingoGameManager.RevealWinnersForRound on the client) - this is
-   * purely for players who join/reconnect later and need the log to catch up on.
+   * Builds + saves one system chat message per winner ("Han cantado línea en la bola 31. Kinora
+   * ha ganado 729000 fichas por Línea."), skipping anyone whose chatAnnouncedAt is already set -
+   * idempotent, so it's safe to call both from the real-time per-tick check (announceDueWinners)
+   * AND once more as a safety net right at game finish (finishGameTransaction) without risking a
+   * duplicate announcement for the same win.
    */
-  async recordSystemWinnerMessages(game: BingoGame, winners: BingoWinner[]): Promise<void> {
-    if (winners.length === 0 || !game.startAt) {
-      return;
+  private async announceWinners(game: BingoGame, winners: BingoWinner[]): Promise<ChatMessageEntry[]> {
+    const pending = winners.filter((w) => !w.chatAnnouncedAt && w.roundNumber !== null);
+    if (pending.length === 0) {
+      return [];
     }
 
-    const playerIds = Array.from(new Set(winners.map((w) => w.playerId)));
+    const playerIds = Array.from(new Set(pending.map((w) => w.playerId)));
     const players = await this.getPlayersByIds(playerIds);
     const nameById = new Map(players.map((p) => [p.id, p.displayName ?? p.username]));
-    const startAtMs = new Date(game.startAt).getTime();
 
-    const labels: Record<string, string> = {
-      [BingoWinType.LINE]: 'línea',
-      [BingoWinType.DOUBLE_LINE]: 'doble línea',
-      [BingoWinType.BINGO]: 'bingo',
-      [BingoWinType.SUPERBINGO]: 'superbingo',
-    };
+    const now = new Date();
+    const entities = pending.map((w) => this.buildSystemWinnerMessageEntity(game, w, nameById.get(w.playerId) ?? 'Jugador', now));
+    const saved = await this.chatMessageRepository.save(entities);
 
-    const entities = winners
-      .filter((w) => w.roundNumber !== null)
-      .map((w) => {
-        const label = labels[w.winType] ?? w.winType;
-        const nick = nameById.get(w.playerId) ?? 'Jugador';
-        const message = `Han cantado ${label} en la bola ${w.roundNumber}. ${nick} ha ganado ${Number(w.prizeAmount)} fichas por ${label.charAt(0).toUpperCase()}${label.slice(1)}.`;
-        return this.chatMessageRepository.create({
-          roomId: game.roomId,
-          playerId: w.playerId,
-          displayName: nick,
-          role: null,
-          message,
-          type: BingoChatMessageType.SYSTEM,
-          createdAt: new Date(startAtMs + (w.roundNumber as number) * 1000),
-        });
-      });
-
-    if (entities.length > 0) {
-      await this.chatMessageRepository.save(entities);
+    for (const winner of pending) {
+      winner.chatAnnouncedAt = now;
     }
+    await this.winnerRepository.save(pending);
+
+    return saved.map((m) => this.toChatMessageEntry(m));
+  }
+
+  /**
+   * Called every engine tick while a game is RUNNING (see BingoEngineService.processRoom) -
+   * announces, in near-real-time, any winner whose round the client would already be revealing
+   * (matched via deriveGameProgress's currentRound, the same clock the client's own ball animation
+   * uses). Returns the newly-created chat entries so the gateway can broadcast them live - this
+   * replaces the old version of this feature, which silently backdated everything into history
+   * only once the game finished, so nobody connected actually saw it happen in the chat feed.
+   */
+  async announceDueWinners(game: BingoGame, currentRound: number): Promise<ChatMessageEntry[]> {
+    const winners = await this.winnerRepository.find({ where: { gameId: game.id, chatAnnouncedAt: IsNull() } });
+    const due = winners.filter((w) => w.roundNumber !== null && (w.roundNumber as number) <= currentRound);
+    return this.announceWinners(game, due);
   }
 }

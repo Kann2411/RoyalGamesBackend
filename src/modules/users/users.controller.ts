@@ -32,6 +32,9 @@ import { UsersService } from './users.service';
 import { UpdateAvatarDto } from './dtos/update-avatar.dto';
 import { CreateUserDto } from './dtos/create-user.dto';
 import { UpdateUserDto } from './dtos/update-user.dto';
+import { ChangePasswordDto } from './dtos/change-password.dto';
+import { AdminSetEmailDto } from './dtos/admin-set-email.dto';
+import { AdminSetPasswordDto } from './dtos/admin-set-password.dto';
 import { ManageUserDto } from './dtos/manage-user.dto';
 import { AdminUserDto } from './dtos/admin-user.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -57,7 +60,7 @@ export class UsersController {
 
   @Get('getUsers')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all users (Admin only)' })
   @ApiResponse({ status: 200, description: 'Users retrieved successfully' })
@@ -120,6 +123,21 @@ export class UsersController {
     return this.usersService.getUserByNick(nick);
   }
 
+  @Get('check-availability')
+  @ApiOperation({
+    summary:
+      'Check whether a nick and/or email are already registered (public). Returns booleans only, never user data, so it is safe to call before signup/login.',
+  })
+  @ApiQuery({ name: 'nick', description: 'Nickname to check', required: false })
+  @ApiQuery({ name: 'email', description: 'Email to check', required: false })
+  @ApiResponse({ status: 200, description: 'Availability flags returned' })
+  async checkAvailability(
+    @Query('nick') nick?: string,
+    @Query('email') email?: string,
+  ) {
+    return this.usersService.checkAvailability(nick, email);
+  }
+
   @Patch('actualizar-usuario/:userId')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -141,9 +159,29 @@ export class UsersController {
     return this.usersService.updateUser(userId, updateUserDto);
   }
 
+  @Patch('users/:userId/password')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Change my own password (requires current password)' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Password changed successfully' })
+  @ApiResponse({ status: 400, description: 'Current password is incorrect' })
+  @ApiResponse({ status: 403, description: 'Forbidden - Cannot change another user password' })
+  async changePassword(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() dto: ChangePasswordDto,
+    @CurrentUser() user: any,
+  ) {
+    if (user.id !== userId) {
+      throw new ForbiddenException('Cannot change another user password');
+    }
+    await this.usersService.changePassword(userId, dto.currentPassword, dto.newPassword);
+    return { message: 'Password changed successfully' };
+  }
+
   @Delete('user-delete/:userId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete user (Admin only)' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
@@ -157,7 +195,7 @@ export class UsersController {
 
   @Put('user-ban')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Ban/Unban user (Admin only)' })
@@ -169,7 +207,7 @@ export class UsersController {
 
   @Put('inactivar-user')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiBearerAuth()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Inactivate/Activate user (Admin only)' })
@@ -189,6 +227,36 @@ export class UsersController {
   @ApiResponse({ status: 404, description: 'User not found' })
   async setUserAdmin(@Body() adminUserDto: AdminUserDto) {
     return this.usersService.setUserAdmin(adminUserDto);
+  }
+
+  @Patch('admin/users/:userId/email')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.MOD)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Change another user's email (Admin only, for account recovery)" })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Email updated successfully' })
+  @ApiResponse({ status: 409, description: 'Email already in use' })
+  async adminSetEmail(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() dto: AdminSetEmailDto,
+  ) {
+    return this.usersService.adminSetEmail(userId, dto.email);
+  }
+
+  @Patch('admin/users/:userId/password')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.MOD)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Reset another user's password (Admin only, for account recovery)" })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Password updated successfully' })
+  async adminSetPassword(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() dto: AdminSetPasswordDto,
+  ) {
+    await this.usersService.adminSetPassword(userId, dto.newPassword);
+    return { message: 'Password updated successfully' };
   }
 
   @Put('firstchips/:userId')

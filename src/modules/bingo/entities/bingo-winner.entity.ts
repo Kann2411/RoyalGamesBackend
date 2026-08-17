@@ -54,6 +54,12 @@ export class BingoWinner {
   @Column({ type: 'int', nullable: true })
   roundNumber: number | null;
 
+  /** Set once the engine has broadcast this winner's chat announcement live (see
+   *  BingoEngineService.processRoom / BingoService.announceDueWinners) - null means still pending,
+   *  keeps the per-tick check idempotent so the same win doesn't get announced twice. */
+  @Column({ type: 'timestamp', nullable: true })
+  chatAnnouncedAt: Date | null;
+
   @CreateDateColumn()
   createdAt: Date;
 }

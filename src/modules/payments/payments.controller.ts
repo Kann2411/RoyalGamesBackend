@@ -130,7 +130,7 @@ export class PaymentsController {
   // ============= GENERAL =============
   @Get('payments')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN)
+  @Roles(Role.ADMIN, Role.MOD)
   @ApiOperation({ summary: 'Get all payments (Admin only)' })
   @ApiResponse({ status: 200, description: 'Payments retrieved successfully' })
   async getAllPayments() {

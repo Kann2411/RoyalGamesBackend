@@ -13,9 +13,9 @@ export class ChipsRepository {
     private chipsAwardRepository: Repository<ChipsAward>,
   ) {}
 
-  async logAward(userId: string, amount: number, source: ChipsAwardSource): Promise<void> {
+  async logAward(userId: string, amount: number, source: ChipsAwardSource, game: string | null = null): Promise<void> {
     await this.chipsAwardRepository.save(
-      this.chipsAwardRepository.create({ userId, amount, source }),
+      this.chipsAwardRepository.create({ userId, amount, source, game }),
     );
   }
 

@@ -9,7 +9,7 @@ import { Role } from '../../common/enums/role.enum';
 @ApiTags('Admin')
 @ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(Role.ADMIN)
+@Roles(Role.ADMIN, Role.MOD)
 @Controller('admin')
 export class AdminController {
   constructor(private adminService: AdminService) {}
@@ -26,5 +26,11 @@ export class AdminController {
     const parsed = limitParam ? parseInt(limitParam, 10) : NaN;
     const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, 500) : 200;
     return this.adminService.getDeposits(limit);
+  }
+
+  @Get('referrals')
+  @ApiOperation({ summary: 'Referral tracking: who referred whom and their deposit status (Admin only)' })
+  async getReferrals() {
+    return this.adminService.getReferrals();
   }
 }

@@ -129,6 +129,12 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.registry.broadcastToRoom(roomId, { type: 'chat_message', payload: entry });
   }
 
+  /** Same broadcast handleChatSend does above, but for server-originated system messages (ej. a
+   *  winner announcement from BingoEngineService) instead of a message a player actually typed. */
+  broadcastChatMessage(roomId: string, entry: import('./ws/ws-message.types').ChatMessageEntry): void {
+    this.registry.broadcastToRoom(roomId, { type: 'chat_message', payload: entry });
+  }
+
   async broadcastRoomState(roomId: string): Promise<void> {
     const payload = await this.buildRoomStatePayload(roomId);
     this.registry.broadcastToRoom(roomId, { type: 'room_state', payload });

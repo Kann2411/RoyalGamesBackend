@@ -1,9 +1,10 @@
-import { Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, ForbiddenException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Raw } from 'typeorm';
 import { Message } from './entities/message.entity';
 import { SendMessageDto } from './dtos/send-message.dto';
 import { User } from '../users/entities/user.entity';
+import { BlocksService } from '../blocks/blocks.service';
 
 @Injectable()
 export class MessagesService {
@@ -12,6 +13,7 @@ export class MessagesService {
     private messageRepository: Repository<Message>,
     @InjectRepository(User)
     private usersRepository: Repository<User>,
+    private blocksService: BlocksService,
   ) {}
 
   private async findUserByNick(nick: string): Promise<User> {
@@ -28,6 +30,10 @@ export class MessagesService {
     const recipient = await this.findUserByNick(dto.recipientNick);
     if (recipient.id === senderId) {
       throw new BadRequestException('No puedes enviarte un mensaje a ti mismo');
+    }
+
+    if (await this.blocksService.isBlockedEitherDirection(senderId, recipient.id)) {
+      throw new ForbiddenException('No puedes enviar un mensaje a este usuario');
     }
 
     const message = this.messageRepository.create({
