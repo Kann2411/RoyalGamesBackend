@@ -35,6 +35,8 @@ import { User } from '../users/entities/user.entity';
   ],
   controllers: [BingoController],
   providers: [BingoService, BingoGateway, BingoEngineService, BingoConnectionRegistry],
-  exports: [BingoService],
+  // BingoGateway exported so other games' chip-moving flows (ej. MinesService) can push a fresh
+  // room_state to their own isLobby chat channel after chips change - see MinesModule.
+  exports: [BingoService, BingoGateway],
 })
 export class BingoModule {}

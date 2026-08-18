@@ -216,6 +216,7 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       role: player.user?.role ?? null,
       isPlaying: playingSet.has(player.id),
       chips: Number(player.user?.chips ?? 0),
+      rank: player.user?.rank ?? null,
     }));
   }
 

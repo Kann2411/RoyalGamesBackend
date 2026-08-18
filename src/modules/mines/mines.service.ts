@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectDataSource } from '@nestjs/typeorm';
@@ -14,6 +15,8 @@ import { StartRoundDto } from './dtos/start-round.dto';
 import { RevealTileDto } from './dtos/reveal-tile.dto';
 import { CashoutDto } from './dtos/cashout.dto';
 import { MINES_TILE_COUNT } from './constants/fixed-bet-values';
+import { BingoService } from '../bingo/bingo.service';
+import { BingoGateway } from '../bingo/bingo.gateway';
 
 // Postgres unique_violation, thrown by the partial unique index on (userId) WHERE
 // status = 'active' when two concurrent `start` calls race past the pre-check below.
@@ -21,7 +24,29 @@ const PG_UNIQUE_VIOLATION = '23505';
 
 @Injectable()
 export class MinesService {
-  constructor(@InjectDataSource() private dataSource: DataSource) {}
+  private readonly logger = new Logger(MinesService.name);
+
+  constructor(
+    @InjectDataSource() private dataSource: DataSource,
+    private bingoService: BingoService,
+    private bingoGateway: BingoGateway,
+  ) {}
+
+  /**
+   * Chips only change here on start (debit) and cashout (credit) - the Minas chat panel's player
+   * list (PresenceEntry.chips, see bingo.gateway.ts buildPresence) is a snapshot the gateway only
+   * refreshes on its own WS events, so without this a player's displayed chip count would go
+   * stale the moment they play. Best-effort: never let a chat-refresh hiccup fail the actual
+   * money-moving request, which has already succeeded by the time this runs.
+   */
+  private async refreshMinasChatPresence(): Promise<void> {
+    try {
+      const room = await this.bingoService.ensureLobbyRoom('minas', 'Minas');
+      await this.bingoGateway.broadcastRoomState(room.id);
+    } catch (err: any) {
+      this.logger.warn(`Could not refresh Minas chat presence: ${err?.message}`);
+    }
+  }
 
   async startRound(userId: string, dto: StartRoundDto) {
     const { betAmount, minesCount } = dto;
@@ -40,7 +65,7 @@ export class MinesService {
     const incrementBp = Math.round(multiplierBp / 2);
 
     try {
-      return await this.dataSource.transaction(async (manager) => {
+      const result = await this.dataSource.transaction(async (manager) => {
         const user = await manager
           .createQueryBuilder(User, 'user')
           .setLock('pessimistic_write')
@@ -80,6 +105,9 @@ export class MinesService {
           chips: user.chips,
         };
       });
+
+      await this.refreshMinasChatPresence();
+      return result;
     } catch (err: any) {
       if (err?.code === PG_UNIQUE_VIOLATION) {
         throw new ConflictException('You already have an active Mines round');
@@ -141,7 +169,7 @@ export class MinesService {
   async cashout(userId: string, dto: CashoutDto) {
     const { roundId } = dto;
 
-    return this.dataSource.transaction(async (manager) => {
+    const result = await this.dataSource.transaction(async (manager) => {
       const round = await manager
         .createQueryBuilder(MinesRound, 'round')
         .setLock('pessimistic_write')
@@ -187,6 +215,9 @@ export class MinesService {
 
       return { winAmount, chips: user.chips };
     });
+
+    await this.refreshMinasChatPresence();
+    return result;
   }
 
   // Mirrors BetManager.cs CalcularMultiplicador(): 0.5 + (minesCount - 5) * 0.1, in basis

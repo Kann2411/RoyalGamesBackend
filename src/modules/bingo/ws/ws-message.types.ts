@@ -90,6 +90,9 @@ export interface PresenceEntry {
   isPlaying: boolean;
   /** Real wallet balance (User.chips) - 0 when the player has no linked site account. */
   chips: number;
+  /** 'bronze' | 'silver' | 'gold' | 'platinum' | 'diamond' - null when the player has no linked
+   *  site account (User.rank only exists on real accounts). */
+  rank: string | null;
 }
 
 export interface ChatMessageEntry {

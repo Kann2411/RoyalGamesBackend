@@ -7,6 +7,7 @@ import { ChipsAward } from '../chips/entities/chips-award.entity';
 import { MinesController } from './mines.controller';
 import { MinesService } from './mines.service';
 import { MinesSessionGuard } from '../../common/guards/mines-session.guard';
+import { BingoModule } from '../bingo/bingo.module';
 
 @Module({
   imports: [
@@ -17,6 +18,9 @@ import { MinesSessionGuard } from '../../common/guards/mines-session.guard';
       secret: process.env.JWT_SECRET || 'royal-secret-key',
       signOptions: { expiresIn: '24h' },
     }),
+    // For pushing a fresh room_state (chips) to Minas's chat channel whenever a round moves
+    // chips - see MinesService's use of BingoGateway/BingoService.
+    BingoModule,
   ],
   controllers: [MinesController],
   providers: [MinesService, MinesSessionGuard],
