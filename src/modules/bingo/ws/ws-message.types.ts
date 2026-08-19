@@ -28,6 +28,14 @@ export interface GiftCardsMessage {
   quantity: number;
 }
 
+/** Guesses which number will be drawn first once `gameId` (a WAITING game) starts - see
+ *  BingoService.submitNumberGuess. Only valid while that game is still WAITING; one guess per
+ *  player per game, enforced both in code and by a DB unique index. */
+export interface GuessNumberMessage {
+  gameId: string;
+  number: number;
+}
+
 // ---- Server -> Client ----
 
 export interface PlayerSummary {

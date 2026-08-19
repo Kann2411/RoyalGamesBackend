@@ -15,6 +15,7 @@ function buildService(dataSourceOverrides: any = {}) {
     audit: { create: jest.fn((v: any) => v), save: jest.fn() },
     chat: { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v) },
     giftedCredit: { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v) },
+    numberGuess: { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v), delete: jest.fn() },
   };
 
   const dataSource = {
@@ -34,6 +35,7 @@ function buildService(dataSourceOverrides: any = {}) {
     repos.audit as any,
     repos.chat as any,
     repos.giftedCredit as any,
+    repos.numberGuess as any,
     dataSource as any,
   );
 
@@ -230,6 +232,33 @@ describe('BingoService', () => {
       await expect(service.purchaseCard('game-1', 'player-1', { playerId: 'player-1', quantity: 1 } as any)).rejects.toThrow(
         'Player not linked to a user',
       );
+    });
+  });
+
+  describe('computeLevelFromTotalCards (private static)', () => {
+    it('matches the agreed curve: level 1 by default, 2 at 5 cards, 3 at 17 (5+12) cards', () => {
+      const compute = (total: number) => (BingoService as any).computeLevelFromTotalCards(total);
+
+      expect(compute(0)).toBe(1);
+      expect(compute(4)).toBe(1);
+      expect(compute(5)).toBe(2);
+      expect(compute(16)).toBe(2);
+      expect(compute(17)).toBe(3);
+    });
+
+    it('never exceeds the level cap even with an enormous total', () => {
+      const compute = (total: number) => (BingoService as any).computeLevelFromTotalCards(total);
+      expect(compute(10_000_000)).toBe(500);
+    });
+
+    it('is monotonic - more cards never means a lower level', () => {
+      const compute = (total: number) => (BingoService as any).computeLevelFromTotalCards(total);
+      let lastLevel = 1;
+      for (let total = 0; total <= 5000; total += 37) {
+        const level = compute(total);
+        expect(level).toBeGreaterThanOrEqual(lastLevel);
+        lastLevel = level;
+      }
     });
   });
 });

@@ -5,6 +5,9 @@ import { WsEnvelope } from './ws-message.types';
 interface ConnectionMeta {
   roomId: string;
   playerId: string;
+  /** Captured once at connection time (see BingoGateway.extractClientIp) - used by the "guess the
+   *  first number" mini-game to block a second guess from the same IP in the same round. */
+  ipAddress: string | null;
 }
 
 @Injectable()
@@ -12,12 +15,12 @@ export class BingoConnectionRegistry {
   private readonly roomSockets = new Map<string, Set<WebSocket>>();
   private readonly socketMeta = new Map<WebSocket, ConnectionMeta>();
 
-  register(client: WebSocket, roomId: string, playerId: string): void {
+  register(client: WebSocket, roomId: string, playerId: string, ipAddress: string | null = null): void {
     if (!this.roomSockets.has(roomId)) {
       this.roomSockets.set(roomId, new Set());
     }
     this.roomSockets.get(roomId)!.add(client);
-    this.socketMeta.set(client, { roomId, playerId });
+    this.socketMeta.set(client, { roomId, playerId, ipAddress });
   }
 
   unregister(client: WebSocket): void {

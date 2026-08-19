@@ -18,6 +18,7 @@ import { BingoWinner, BingoWinType } from './entities/bingo-winner.entity';
 import { BingoAudit } from './entities/bingo-audit.entity';
 import { BingoChatMessage, BingoChatMessageType } from './entities/bingo-chat-message.entity';
 import { BingoGiftedCardCredit } from './entities/bingo-gifted-card-credit.entity';
+import { BingoNumberGuess } from './entities/bingo-number-guess.entity';
 import { User } from '../users/entities/user.entity';
 import { CreatePlayerDto } from './dtos/create-player.dto';
 import { CreateRoomDto } from './dtos/create-room.dto';
@@ -73,12 +74,36 @@ export class BingoService {
     private readonly chatMessageRepository: Repository<BingoChatMessage>,
     @InjectRepository(BingoGiftedCardCredit)
     private readonly giftedCardCreditRepository: Repository<BingoGiftedCardCredit>,
+    @InjectRepository(BingoNumberGuess)
+    private readonly numberGuessRepository: Repository<BingoNumberGuess>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
 
   private static readonly CHAT_MESSAGE_MAX_LENGTH = 500;
   private static readonly CHAT_HISTORY_LIMIT = 50;
+  private static readonly MAX_PLAYER_LEVEL = 500;
+
+  /** Cumulative lifetime cards needed to REACH `level` (level 1 needs 0 - everyone starts there).
+   *  Each level costs a bit more than the last to reach: level N->N+1 alone needs 5 + 7*(N-1)
+   *  cards (5, then 12, then 19, then 26...) - easy at first, a little harder every level, but
+   *  linear rather than quadratic/geometric so level 500 stays a real long-term target instead of
+   *  either trivial or practically unreachable. */
+  private static cardsNeededForLevel(level: number): number {
+    const steps = level - 1;
+    if (steps <= 0) {
+      return 0;
+    }
+    return steps * 5 + (7 * (steps * (steps - 1))) / 2;
+  }
+
+  private static computeLevelFromTotalCards(totalCards: number): number {
+    let level = 1;
+    while (level < BingoService.MAX_PLAYER_LEVEL && BingoService.cardsNeededForLevel(level + 1) <= totalCards) {
+      level++;
+    }
+    return level;
+  }
 
   // ---------------------------------------------------------------------
   // Players
@@ -807,6 +832,16 @@ export class BingoService {
       existingTicket.cost = Number(existingTicket.cost) + totalCost;
       await manager.save(existingTicket);
 
+      // Level is lifetime-cumulative and counts every card ever bought, across every room -
+      // recomputed from the running total rather than just bumped by one, so it stays correct
+      // even if the curve (BingoService.cardsNeededForLevel) ever changes later.
+      player.totalCardsPurchased = Number(player.totalCardsPurchased) + quantity;
+      const newLevel = BingoService.computeLevelFromTotalCards(player.totalCardsPurchased);
+      if (newLevel !== player.level) {
+        player.level = newLevel;
+      }
+      await manager.save(player);
+
       // The superbingo pool grows in real time as people buy, on top of its room-specific base
       // value (e.g. base 30000, buy a 1000-chip card -> pool becomes 30100 = +10% of the cost).
       if (totalCost > 0) {
@@ -967,6 +1002,120 @@ export class BingoService {
     }
 
     return Array.from(countByTier.entries()).map(([betAmount, count]) => ({ betAmount, count }));
+  }
+
+  // ---------------------------------------------------------------------
+  // "Guess the first number" mini-game
+  // ---------------------------------------------------------------------
+
+  private static readonly NUMBER_GUESS_REWARD_CARDS = 6;
+
+  /** One guess per player per round, enforced here (fast, friendly error) AND by a DB unique
+   *  index (the real guard against a race between two concurrent submits). A second unique index
+   *  on (gameId, ipAddress) blocks a second guess from the same connection's IP in the same round
+   *  - a lightweight defense against one person covering more numbers with throwaway accounts.
+   *  Only allowed while the game is still WAITING: the draw itself doesn't exist yet at that point
+   *  (see startGameTransaction), so there's no way for anyone - including this server - to know
+   *  the answer in advance. */
+  async submitNumberGuess(gameId: string, playerId: string, ipAddress: string | null, guessedNumber: number): Promise<void> {
+    if (!gameId) {
+      throw new BadRequestException('gameId is required');
+    }
+    if (!Number.isInteger(guessedNumber) || guessedNumber < 1 || guessedNumber > 90) {
+      throw new BadRequestException('Number must be between 1 and 90');
+    }
+
+    const game = await this.gameRepository.findOne({ where: { id: gameId } });
+    if (!game) {
+      throw new NotFoundException('Game not found');
+    }
+    if (game.state !== BingoGameState.WAITING) {
+      throw new BadRequestException('Guessing is closed for this round');
+    }
+
+    const existingByPlayer = await this.numberGuessRepository.findOne({ where: { gameId, playerId } });
+    if (existingByPlayer) {
+      throw new BadRequestException('ALREADY_GUESSED');
+    }
+
+    if (ipAddress) {
+      const existingByIp = await this.numberGuessRepository.findOne({ where: { gameId, ipAddress } });
+      if (existingByIp) {
+        throw new BadRequestException('DUPLICATE_IP');
+      }
+    }
+
+    try {
+      await this.numberGuessRepository.save(
+        this.numberGuessRepository.create({ gameId, playerId, guessedNumber, ipAddress }),
+      );
+    } catch {
+      // Two guesses racing past the checks above land here - the DB's unique indexes are the real
+      // guard, the checks above just make the common case fail fast with a friendly message.
+      throw new BadRequestException('ALREADY_GUESSED');
+    }
+  }
+
+  /**
+   * Resolves every guess made for `gameId` against the number that just turned out to be first in
+   * its freshly-generated draw plan - called once, right after that game transitions waiting ->
+   * running (see BingoEngineService), the earliest point the answer exists at all. Rewards go out
+   * as gifted-card credits (same mechanic GiftCardsPanelUI uses), redeemable the same way - via
+   * the "usar cartones gratis" button or a normal purchase in a room at this price tier. Returns
+   * 0 or 1 chat entries (mirrors announceDueWinners' array contract) for the caller to broadcast.
+   */
+  async announceNumberGuessWinners(gameId: string): Promise<ChatMessageEntry[]> {
+    const guesses = await this.numberGuessRepository.find({ where: { gameId } });
+    // A gameId is only ever WAITING once - nothing left to check these against after this point,
+    // so clear them now regardless of outcome instead of letting the table grow forever.
+    if (guesses.length > 0) {
+      await this.numberGuessRepository.delete({ gameId });
+    }
+    if (guesses.length === 0) {
+      return [];
+    }
+
+    const game = await this.gameRepository.findOne({ where: { id: gameId } });
+    const firstNumber: number | undefined = game?.persistedSnapshot?.plannedDraws?.[0];
+    if (!game || firstNumber == null) {
+      return [];
+    }
+
+    const winners = guesses.filter((g) => g.guessedNumber === firstNumber);
+    if (winners.length === 0) {
+      return [];
+    }
+
+    const room = await this.roomRepository.findOne({ where: { id: game.roomId } });
+    const unitCost = Number(room?.config?.chipsRequired ?? room?.betAmount ?? 0);
+    const reward = BingoService.NUMBER_GUESS_REWARD_CARDS;
+
+    const creditsToCreate: BingoGiftedCardCredit[] = [];
+    for (const winner of winners) {
+      for (let i = 0; i < reward; i++) {
+        creditsToCreate.push(
+          this.giftedCardCreditRepository.create({
+            recipientPlayerId: winner.playerId,
+            betAmount: unitCost,
+            giftedByPlayerId: null,
+            giftedByDisplayName: 'Sistema',
+          }),
+        );
+      }
+    }
+    await this.giftedCardCreditRepository.save(creditsToCreate);
+
+    const players = await this.playerRepository.find({ where: { id: In(winners.map((w) => w.playerId)) } });
+    const nameById = new Map(players.map((p) => [p.id, p.displayName ?? p.username]));
+    const names = winners.map((w) => nameById.get(w.playerId) ?? 'Jugador').join(', ');
+    const verb = winners.length === 1 ? 'adivinó' : 'adivinaron';
+    const won = winners.length === 1 ? 'ganó' : 'ganaron';
+
+    const chatEntry = await this.sendSystemMessage(
+      game.roomId,
+      `🎉 ¡${names} ${verb} que el ${firstNumber} sería el primer número y ${won} ${reward} cartones gratis!`,
+    );
+    return [chatEntry];
   }
 
   private async cleanupInvalidCards(gameId: string): Promise<void> {

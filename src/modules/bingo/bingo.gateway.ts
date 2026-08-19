@@ -9,6 +9,7 @@ import {
   BuyCardsMessage,
   ChatSendMessage,
   GiftCardsMessage,
+  GuessNumberMessage,
   PresenceEntry,
   RoomStatePayload,
   UpdateMarksMessage,
@@ -43,7 +44,7 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       await this.bingoService.getPlayer(playerId);
       const room = await this.bingoService.getRoom(roomId);
 
-      this.registry.register(client, roomId, playerId);
+      this.registry.register(client, roomId, playerId, this.extractClientIp(request));
       client.on('message', (raw: WebSocket.RawData) => this.handleMessage(client, raw));
       client.on('error', (err) => this.logger.warn(`Socket error for player ${playerId}: ${err.message}`));
 
@@ -62,6 +63,21 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.logger.warn(`Rejected connection: ${(error as Error).message}`);
       client.close(4004, 'Unable to join room');
     }
+  }
+
+  /** Render (and most PaaS hosts) sit in front of this app as a reverse proxy, so the raw TCP
+   *  connection's remoteAddress is the proxy's own IP, not the player's - the real client IP shows
+   *  up in X-Forwarded-For instead, closest-to-client entry first. Falls back to remoteAddress for
+   *  local/direct connections (ej. running the backend locally). */
+  private extractClientIp(request: IncomingMessage): string | null {
+    const forwarded = request.headers['x-forwarded-for'];
+    if (typeof forwarded === 'string' && forwarded.length > 0) {
+      return forwarded.split(',')[0].trim();
+    }
+    if (Array.isArray(forwarded) && forwarded.length > 0) {
+      return forwarded[0].trim();
+    }
+    return request.socket?.remoteAddress ?? null;
   }
 
   handleDisconnect(client: WebSocket): void {
@@ -102,6 +118,9 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         case 'gift_cards':
           await this.handleGiftCards(meta.roomId, meta.playerId, envelope.payload as GiftCardsMessage);
           break;
+        case 'guess_number':
+          await this.handleGuessNumber(meta.playerId, meta.ipAddress, envelope.payload as GuessNumberMessage);
+          break;
         case 'ping':
           this.registry.sendTo(client, { type: 'pong', payload: { serverTime: new Date().toISOString() } });
           break;
@@ -131,6 +150,14 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private async handleChatSend(roomId: string, playerId: string, payload: ChatSendMessage): Promise<void> {
     const entry = await this.bingoService.sendChatMessage(roomId, playerId, payload?.message ?? '');
     this.registry.broadcastToRoom(roomId, { type: 'chat_message', payload: entry });
+  }
+
+  /** No broadcast afterward - same as handleUpdateMarks, this only affects the guessing player's
+   *  own pending guess, nothing anyone else in the room needs to see right now. Errors (already
+   *  guessed, duplicate IP, game no longer waiting) surface to the caller via the normal
+   *  try/catch in handleMessage -> sendError. */
+  private async handleGuessNumber(playerId: string, ipAddress: string | null, payload: GuessNumberMessage): Promise<void> {
+    await this.bingoService.submitNumberGuess(payload?.gameId, playerId, ipAddress, payload?.number);
   }
 
   private async handleGiftCards(roomId: string, playerId: string, payload: GiftCardsMessage): Promise<void> {

@@ -47,6 +47,11 @@ export class BingoPlayer {
   @Column({ type: 'int', default: 1 })
   level: number;
 
+  /** Lifetime cards ever bought, across every room - what BingoService.computeLevelFromTotalCards
+   *  uses to decide `level`. Never decreases, never resets between games. */
+  @Column({ type: 'bigint', default: 0 })
+  totalCardsPurchased: number;
+
   @Column({ type: 'enum', enum: BingoPlayerStatus, default: BingoPlayerStatus.OFFLINE })
   status: BingoPlayerStatus;
 

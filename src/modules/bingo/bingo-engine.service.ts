@@ -139,6 +139,17 @@ export class BingoEngineService implements OnModuleInit {
       // follow-up room_state is what actually delivers that as `nextGame` to everyone, so
       // whoever has no cards in what just started running can immediately buy into it.
       await this.gateway.broadcastRoomState(roomId);
+
+      // The first ball just became known for the first time (it didn't exist while this game was
+      // still WAITING) - this is the earliest point anyone's "guess the first number" can be
+      // resolved. Best-effort: a failure here shouldn't be able to take down the room's tick.
+      const guessAnnouncements = await this.bingoService.announceNumberGuessWinners(started.id).catch((err) => {
+        this.logger.warn(`announceNumberGuessWinners failed for game=${started.id}: ${(err as Error).message}`);
+        return [];
+      });
+      for (const entry of guessAnnouncements) {
+        this.gateway.broadcastChatMessage(roomId, entry);
+      }
     }
   }
 
