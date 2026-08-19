@@ -1,4 +1,4 @@
-import { Logger } from '@nestjs/common';
+import { Logger, NotFoundException } from '@nestjs/common';
 import { OnGatewayConnection, OnGatewayDisconnect, WebSocketGateway } from '@nestjs/websockets';
 import type { IncomingMessage } from 'http';
 import type WebSocket from 'ws';
@@ -8,6 +8,7 @@ import { isOriginAllowed } from '../../config/cors-origins';
 import {
   BuyCardsMessage,
   ChatSendMessage,
+  GiftCardsMessage,
   PresenceEntry,
   RoomStatePayload,
   UpdateMarksMessage,
@@ -98,6 +99,9 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         case 'chat_send':
           await this.handleChatSend(meta.roomId, meta.playerId, envelope.payload as ChatSendMessage);
           break;
+        case 'gift_cards':
+          await this.handleGiftCards(meta.roomId, meta.playerId, envelope.payload as GiftCardsMessage);
+          break;
         case 'ping':
           this.registry.sendTo(client, { type: 'pong', payload: { serverTime: new Date().toISOString() } });
           break;
@@ -127,6 +131,14 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
   private async handleChatSend(roomId: string, playerId: string, payload: ChatSendMessage): Promise<void> {
     const entry = await this.bingoService.sendChatMessage(roomId, playerId, payload?.message ?? '');
     this.registry.broadcastToRoom(roomId, { type: 'chat_message', payload: entry });
+  }
+
+  private async handleGiftCards(roomId: string, playerId: string, payload: GiftCardsMessage): Promise<void> {
+    const { chatEntry } = await this.bingoService.giftCards(playerId, payload?.targetPlayerId, roomId, payload?.quantity);
+    this.registry.broadcastToRoom(roomId, { type: 'chat_message', payload: chatEntry });
+    // Refreshes everyone's presence.chips in this room - the gifter's nav bar chip counter needs
+    // to see the debit immediately, same as a normal card purchase does.
+    await this.broadcastRoomState(roomId);
   }
 
   /** Same broadcast handleChatSend does above, but for server-originated system messages (ej. a
@@ -176,15 +188,29 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         serverTime: new Date().toISOString(),
         room: { id: room.id, name: room.name, betAmount: 0, maxPlayers: room.maxPlayers },
         game: null,
+        nextGame: null,
         presence,
         chatHistory,
       };
     }
 
-    const game = await this.bingoService.getRoomCurrentGame(roomId);
-    const gameSnapshot = await this.bingoService.buildGameSnapshot(game);
+    // A room can have one WAITING (open for purchases) and one RUNNING (ball draw in progress)
+    // game at the same time now - `game` stays "whichever one you'd primarily want to look at"
+    // (RUNNING wins, same priority getRoomCurrentGame uses), `nextGame` only shows up when there's
+    // a genuinely separate second game to buy into while the other one plays out.
+    const { waiting, running } = await this.bingoService.getRoomActiveGames(roomId);
+    const primaryGame = running ?? waiting;
+    if (!primaryGame) {
+      throw new NotFoundException('Room has no active game');
+    }
+
+    const [gameSnapshot, nextGameSnapshot] = await Promise.all([
+      this.bingoService.buildGameSnapshot(primaryGame),
+      running && waiting ? this.bingoService.buildGameSnapshot(waiting) : Promise.resolve(null),
+    ]);
+
     const [presence, chatHistory] = await Promise.all([
-      this.buildPresence(roomId, game.id),
+      this.buildPresence(roomId, primaryGame.id),
       this.bingoService.getChatHistory(roomId),
     ]);
 
@@ -192,6 +218,7 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
       serverTime: new Date().toISOString(),
       room: { id: room.id, name: room.name, betAmount: Number(room.betAmount), maxPlayers: room.maxPlayers },
       game: gameSnapshot,
+      nextGame: nextGameSnapshot,
       presence,
       chatHistory,
     };

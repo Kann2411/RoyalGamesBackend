@@ -24,6 +24,14 @@ export class BingoController {
     return this.bingoService.getPlayer(id);
   }
 
+  /** Pending (unredeemed) gifted-card credits for this player, grouped by price tier - ej.
+   *  [{ betAmount: 250000, count: 3 }] - so the client can show "tenés 3 cartones gratis" on
+   *  whichever room matches that betAmount. */
+  @Get('players/:id/gifted-credits')
+  getPendingGiftedCredits(@Param('id') id: string) {
+    return this.bingoService.getPendingGiftedCreditsSummary(id);
+  }
+
   @Patch('players/:id')
   updatePlayer(@Param('id') id: string, @Body() body: Record<string, any>) {
     return this.bingoService.updatePlayer(id, body);

@@ -21,6 +21,13 @@ export interface ChatSendMessage {
   message: string;
 }
 
+/** Gifts `quantity` free-card credits (scoped to this room's price tier) to another player in
+ *  the room - see BingoService.giftCards. Not tied to any specific game. */
+export interface GiftCardsMessage {
+  targetPlayerId: string;
+  quantity: number;
+}
+
 // ---- Server -> Client ----
 
 export interface PlayerSummary {
@@ -110,8 +117,15 @@ export interface ChatMessageEntry {
 export interface RoomStatePayload {
   serverTime: string;
   room: { id: string; name: string; betAmount: number; maxPlayers: number };
-  /** null for the Lobby pseudo-room - no bingo game ever runs there. */
+  /** null for the Lobby pseudo-room - no bingo game ever runs there. Otherwise the RUNNING game if
+   *  one exists, else the WAITING one - same "whichever one you'd want to look at" priority
+   *  getRoomCurrentGame uses. */
   game: GameSnapshotPayload | null;
+  /** The room's WAITING "next round" game, ONLY populated when `game` above is RUNNING - that's
+   *  the only time there's a second, separate game worth showing (open for purchases while the
+   *  other one's ball draw is in progress). Null the rest of the time, including when `game`
+   *  itself IS the waiting one. */
+  nextGame: GameSnapshotPayload | null;
   presence: PresenceEntry[];
   /** Last N messages (chat + system) for this room, oldest first - lets someone who just
    *  connected (or reconnected) catch up on the conversation. */

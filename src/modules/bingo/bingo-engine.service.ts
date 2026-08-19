@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { BingoService } from './bingo.service';
 import { BingoGateway } from './bingo.gateway';
-import { BingoGameState } from './entities/bingo-game.entity';
+import { BingoGame, BingoGameState } from './entities/bingo-game.entity';
 import { BingoWinner } from './entities/bingo-winner.entity';
 import { deriveGameProgress, getPurchaseWindowRemaining } from './bingo-time.util';
 
@@ -87,62 +87,96 @@ export class BingoEngineService implements OnModuleInit {
     }
   }
 
+  /**
+   * A room can have one WAITING (open for purchases, ej. "next round") and one RUNNING (ball draw
+   * in progress) game at the same time now - so both get checked independently every tick, instead
+   * of assuming there's only ever one active game to look at.
+   */
   private async processRoom(roomId: string, now: Date): Promise<void> {
-    const game = await this.bingoService.getRoomCurrentGame(roomId);
+    const { waiting, running } = await this.bingoService.getRoomActiveGames(roomId);
 
-    if (game.state === BingoGameState.WAITING) {
-      const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt ?? null;
-      const remaining = getPurchaseWindowRemaining(purchaseStartedAt, this.bingoService.purchaseWindowSeconds, now);
-      if (remaining === 0) {
-        const cardsCount = await this.bingoService.countCardsForGame(game.id);
-        if (cardsCount === 0) {
-          // Nothing to start - loop the countdown instead of leaving it stuck at 0 forever.
-          await this.bingoService.restartPurchaseWindow(game.id);
-          await this.gateway.broadcastRoomState(roomId);
-        } else {
-          const started = await this.bingoService.startGame(game.id);
-          if (started.state === BingoGameState.RUNNING) {
-            await this.gateway.broadcastGameStarted(roomId, started.id);
-          }
-        }
+    if (running) {
+      await this.processRunningGame(roomId, running, now);
+    }
+
+    if (waiting) {
+      // The WAITING game's countdown only gets EVALUATED for expiry while nothing is RUNNING -
+      // ensurePurchaseWindowStarted already refuses to even START it otherwise (it can't legally
+      // transition to RUNNING while another game already is - see
+      // AllowConcurrentWaitingAndRunningGame), this is just the matching guard on the expiry side.
+      if (!running) {
+        await this.processWaitingGame(roomId, waiting, now);
       }
+    } else if (!running) {
+      // Defensive: a room should always have at least a WAITING game (ensureDefaultRooms/
+      // createGame/startGame all keep one around), but if this room somehow has neither, create
+      // one instead of leaving it stuck with nothing purchasable.
+      await this.bingoService.createGame({ roomId, config: {} }).catch((err) =>
+        this.logger.warn(`processRoom: failed to create a fallback waiting game for room=${roomId}: ${(err as Error).message}`),
+      );
+    }
+  }
+
+  private async processWaitingGame(roomId: string, game: BingoGame, now: Date): Promise<void> {
+    const purchaseStartedAt = game.persistedSnapshot?.purchaseStartedAt ?? null;
+    const remaining = getPurchaseWindowRemaining(purchaseStartedAt, this.bingoService.purchaseWindowSeconds, now);
+    if (remaining !== 0) {
       return;
     }
 
-    if (game.state === BingoGameState.RUNNING) {
-      const progress = deriveGameProgress(game, now);
-
-      // Announces winners live, in step with the same currentRound clock the client's own ball
-      // animation uses - checked every tick (including the one where the game turns out to be
-      // finished below, so the final bingo still gets announced before its BingoWinner row is
-      // deleted as part of finishing).
-      const announced = await this.bingoService.announceDueWinners(game, progress.currentRound);
-      for (const entry of announced) {
-        this.gateway.broadcastChatMessage(roomId, entry);
-      }
-
-      if (progress.isFinished) {
-        const result = await this.bingoService.finishGameAutomatically(game.id);
-        const pool = await this.bingoService.getOrCreateSuperbingoForRoom(roomId);
-        await this.gateway.broadcastGameFinished(roomId, {
-          gameId: game.id,
-          resultSummary: result.game.resultSummary ?? {},
-          winners: result.winners.map((w: BingoWinner) => ({
-            playerId: w.playerId,
-            cardId: w.cardId,
-            winType: w.winType,
-            prizeAmount: Number(w.prizeAmount),
-            roundNumber: w.roundNumber,
-          })),
-          superbingo: {
-            poolAmount: Number(pool.amount),
-            thresholdBall: pool.thresholdBall,
-          },
-          nextGameId: result.nextGame.id,
-        });
-        await this.gateway.ensureTimerIfRoomOccupied(roomId, result.nextGame.id);
-        await this.gateway.broadcastRoomState(roomId);
-      }
+    const cardsCount = await this.bingoService.countCardsForGame(game.id);
+    if (cardsCount === 0) {
+      // Nothing to start - loop the countdown instead of leaving it stuck at 0 forever.
+      await this.bingoService.restartPurchaseWindow(game.id);
+      await this.gateway.broadcastRoomState(roomId);
+      return;
     }
+
+    const started = await this.bingoService.startGame(game.id);
+    if (started.state === BingoGameState.RUNNING) {
+      await this.gateway.broadcastGameStarted(roomId, started.id);
+      // startGame() just pre-created this room's NEXT waiting game (see its own comment) - a
+      // follow-up room_state is what actually delivers that as `nextGame` to everyone, so
+      // whoever has no cards in what just started running can immediately buy into it.
+      await this.gateway.broadcastRoomState(roomId);
+    }
+  }
+
+  private async processRunningGame(roomId: string, game: BingoGame, now: Date): Promise<void> {
+    const progress = deriveGameProgress(game, now);
+
+    // Announces winners live, in step with the same currentRound clock the client's own ball
+    // animation uses - checked every tick (including the one where the game turns out to be
+    // finished below, so the final bingo still gets announced before its BingoWinner row is
+    // deleted as part of finishing).
+    const announced = await this.bingoService.announceDueWinners(game, progress.currentRound);
+    for (const entry of announced) {
+      this.gateway.broadcastChatMessage(roomId, entry);
+    }
+
+    if (!progress.isFinished) {
+      return;
+    }
+
+    const result = await this.bingoService.finishGameAutomatically(game.id);
+    const pool = await this.bingoService.getOrCreateSuperbingoForRoom(roomId);
+    await this.gateway.broadcastGameFinished(roomId, {
+      gameId: game.id,
+      resultSummary: result.game.resultSummary ?? {},
+      winners: result.winners.map((w: BingoWinner) => ({
+        playerId: w.playerId,
+        cardId: w.cardId,
+        winType: w.winType,
+        prizeAmount: Number(w.prizeAmount),
+        roundNumber: w.roundNumber,
+      })),
+      superbingo: {
+        poolAmount: Number(pool.amount),
+        thresholdBall: pool.thresholdBall,
+      },
+      nextGameId: result.nextGame.id,
+    });
+    await this.gateway.ensureTimerIfRoomOccupied(roomId, result.nextGame.id);
+    await this.gateway.broadcastRoomState(roomId);
   }
 }

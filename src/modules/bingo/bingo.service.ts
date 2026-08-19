@@ -17,6 +17,7 @@ import { BingoSuperBingoPool } from './entities/bingo-super-bingo-pool.entity';
 import { BingoWinner, BingoWinType } from './entities/bingo-winner.entity';
 import { BingoAudit } from './entities/bingo-audit.entity';
 import { BingoChatMessage, BingoChatMessageType } from './entities/bingo-chat-message.entity';
+import { BingoGiftedCardCredit } from './entities/bingo-gifted-card-credit.entity';
 import { User } from '../users/entities/user.entity';
 import { CreatePlayerDto } from './dtos/create-player.dto';
 import { CreateRoomDto } from './dtos/create-room.dto';
@@ -47,7 +48,7 @@ interface PlannedWinnerEvent {
 @Injectable()
 export class BingoService {
   private readonly logger = new Logger(BingoService.name);
-  readonly purchaseWindowSeconds = 10;
+  readonly purchaseWindowSeconds = 30;
 
   constructor(
     @InjectRepository(BingoPlayer)
@@ -70,6 +71,8 @@ export class BingoService {
     private readonly auditRepository: Repository<BingoAudit>,
     @InjectRepository(BingoChatMessage)
     private readonly chatMessageRepository: Repository<BingoChatMessage>,
+    @InjectRepository(BingoGiftedCardCredit)
+    private readonly giftedCardCreditRepository: Repository<BingoGiftedCardCredit>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -255,6 +258,11 @@ export class BingoService {
   // Games: lifecycle (waiting -> running -> finished)
   // ---------------------------------------------------------------------
 
+  /** Ensures this room has a WAITING game, creating one if it doesn't - independent of whether a
+   *  RUNNING game also exists (a room can have one of each at the same time now, see
+   *  AllowConcurrentWaitingAndRunningGame). A legitimately-started RUNNING game always has at
+   *  least one card by construction (startGameTransaction refuses to start otherwise), so it never
+   *  needs to be "reclaimed" as a stand-in for a missing WAITING game the way it used to. */
   async createGame(dto: CreateGameDto & { roomId: string }): Promise<BingoGame> {
     const room = await this.getRoom(dto.roomId);
 
@@ -264,19 +272,6 @@ export class BingoService {
     });
     if (existing) {
       return existing;
-    }
-
-    const running = await this.gameRepository.findOne({
-      where: { roomId: room.id, state: BingoGameState.RUNNING },
-      order: { createdAt: 'DESC' },
-    });
-    if (running) {
-      const hasActivity = await this.hasGameActivity(running.id);
-      if (!hasActivity) {
-        await this.resetGameToWaiting(running);
-      } else {
-        return running;
-      }
     }
 
     const game = this.gameRepository.create({
@@ -374,6 +369,26 @@ export class BingoService {
     return this.createGame({ roomId, config: {} });
   }
 
+  /** Both of a room's active games independently - a room can have at most one WAITING (open for
+   *  purchases, ej. "next round") and at most one RUNNING (ball draw in progress) at the same time
+   *  now (see AllowConcurrentWaitingAndRunningGame). Used by BingoEngineService.processRoom (has
+   *  to progress both independently) and buildRoomStatePayload (sends both to clients) - anything
+   *  that only ever cared about ONE game (ej. a player buying in from the lobby) should keep using
+   *  getRoomCurrentGame above instead, which already resolves to "whichever one you'd want to buy
+   *  into" (WAITING first).
+   */
+  async getRoomActiveGames(roomId: string): Promise<{ waiting: BingoGame | null; running: BingoGame | null }> {
+    const [waitingGames, runningGames] = await Promise.all([
+      this.gameRepository.find({ where: { roomId, state: BingoGameState.WAITING }, order: { createdAt: 'DESC' }, take: 1 }),
+      this.gameRepository.find({ where: { roomId, state: BingoGameState.RUNNING }, order: { createdAt: 'DESC' }, take: 1 }),
+    ]);
+
+    return {
+      waiting: waitingGames[0] ?? null,
+      running: runningGames[0] ?? null,
+    };
+  }
+
   /**
    * Starts a WAITING game's purchase-window countdown the moment someone is actually present to
    * see it (a player connecting to the room), not only once a card is bought - an empty room with
@@ -385,6 +400,17 @@ export class BingoService {
     if (!game || game.persistedSnapshot?.purchaseStartedAt) {
       return;
     }
+
+    // Don't start the countdown for a "next round" game while this room's CURRENT game is still
+    // running - it can't transition to RUNNING until that one finishes anyway (a room only ever
+    // has one RUNNING game at a time, see AllowConcurrentWaitingAndRunningGame), so counting down
+    // now would just expire pointlessly. Gets started for real once the running game finishes
+    // (processRoom calls this again then, via ensureTimerIfRoomOccupied).
+    const runningGame = await this.gameRepository.findOne({ where: { roomId: game.roomId, state: BingoGameState.RUNNING } });
+    if (runningGame) {
+      return;
+    }
+
     game.persistedSnapshot = { ...game.persistedSnapshot, purchaseStartedAt: new Date().toISOString() };
     await this.gameRepository.save(game);
   }
@@ -467,6 +493,16 @@ export class BingoService {
     this.logger.log(`startGame:begin gameId=${gameId}`);
     try {
       const result = await this.startGameTransaction(gameId);
+
+      // Lets players who missed this round buy in for the NEXT one immediately, instead of
+      // waiting for this one to finish - see AllowConcurrentWaitingAndRunningGame. No-ops if one
+      // already exists (ej. this call is a retry, or the engine ticked twice in a row).
+      if (result.state === BingoGameState.RUNNING) {
+        await this.createGame({ roomId: result.roomId, config: {} }).catch((err) =>
+          this.logger.warn(`startGame: failed to pre-create next waiting game for room=${result.roomId}: ${(err as Error).message}`),
+        );
+      }
+
       this.logger.log(`startGame:done gameId=${gameId} tookMs=${Date.now() - startedAt} state=${result.state}`);
       return result;
     } catch (err) {
@@ -711,7 +747,17 @@ export class BingoService {
       }
 
       const unitCost = Number(room.config?.chipsRequired ?? room.betAmount ?? 0);
-      const totalCost = unitCost * quantity;
+
+      // Redeem any pending gifted-card credits for this room's price tier before charging chips -
+      // a gifted card is a "free card" credit scoped to a betAmount tier, redeemable whenever the
+      // recipient wants, in any room at that same tier (see BingoService.giftCards).
+      const availableCredits = await manager.find(BingoGiftedCardCredit, {
+        where: { recipientPlayerId: playerId, betAmount: unitCost, redeemedAt: IsNull() },
+        order: { createdAt: 'ASC' },
+        take: quantity,
+      });
+      const chargeableQuantity = quantity - availableCredits.length;
+      const totalCost = unitCost * chargeableQuantity;
 
       if (totalCost > 0) {
         const user = await manager
@@ -728,6 +774,15 @@ export class BingoService {
         }
         user.chips = Number(user.chips) - totalCost;
         await manager.save(user);
+      }
+
+      if (availableCredits.length > 0) {
+        const now = new Date();
+        for (const credit of availableCredits) {
+          credit.redeemedAt = now;
+          credit.redeemedGameId = game.id;
+        }
+        await manager.save(availableCredits);
       }
 
       const toCreate: BingoCard[] = [];
@@ -774,6 +829,144 @@ export class BingoService {
 
       return { ticket: existingTicket, cards: savedCards };
     });
+  }
+
+  // ---------------------------------------------------------------------
+  // Gifted card credits
+  // ---------------------------------------------------------------------
+
+  async giftCards(fromPlayerId: string, toPlayerId: string, roomId: string, quantity: number): Promise<{ credits: BingoGiftedCardCredit[]; chatEntry: ChatMessageEntry }> {
+    const startedAt = Date.now();
+    this.logger.log(`giftCards:begin from=${fromPlayerId} to=${toPlayerId} roomId=${roomId} quantity=${quantity}`);
+    try {
+      const result = await this.giftCardsTransaction(fromPlayerId, toPlayerId, roomId, quantity);
+      const cardWord = result.credits.length === 1 ? 'cartón' : 'cartones';
+      const chatEntry = await this.sendSystemMessage(
+        roomId,
+        `${result.fromDisplayName} le regaló ${result.credits.length} ${cardWord} a ${result.toDisplayName}.`,
+      );
+      this.logger.log(`giftCards:done from=${fromPlayerId} to=${toPlayerId} tookMs=${Date.now() - startedAt}`);
+      return { credits: result.credits, chatEntry };
+    } catch (err) {
+      this.logger.warn(`giftCards:failed from=${fromPlayerId} to=${toPlayerId} tookMs=${Date.now() - startedAt} error=${(err as Error).message}`);
+      throw err;
+    }
+  }
+
+  private async giftCardsTransaction(
+    fromPlayerId: string,
+    toPlayerId: string,
+    roomId: string,
+    quantity: number,
+  ): Promise<{ credits: BingoGiftedCardCredit[]; fromDisplayName: string; toDisplayName: string }> {
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      throw new BadRequestException('Quantity must be a positive integer');
+    }
+    if (fromPlayerId === toPlayerId) {
+      throw new BadRequestException('Cannot gift cards to yourself');
+    }
+
+    return this.dataSource.transaction(async (manager) => {
+      const fromPlayer = await manager.findOne(BingoPlayer, { where: { id: fromPlayerId } });
+      if (!fromPlayer) {
+        throw new NotFoundException('Player not found');
+      }
+      if (!fromPlayer.userId) {
+        throw new BadRequestException('Player not linked to a user, cannot charge chips');
+      }
+
+      const toPlayer = await manager.findOne(BingoPlayer, { where: { id: toPlayerId } });
+      if (!toPlayer) {
+        throw new NotFoundException('Recipient player not found');
+      }
+
+      const room = await manager.findOne(BingoRoom, { where: { id: roomId } });
+      if (!room) {
+        throw new NotFoundException('Room not found');
+      }
+
+      const unitCost = Number(room.config?.chipsRequired ?? room.betAmount ?? 0);
+      const totalCost = unitCost * quantity;
+
+      if (totalCost > 0) {
+        const user = await manager
+          .createQueryBuilder(User, 'user')
+          .setLock('pessimistic_write')
+          .where('user.id = :id', { id: fromPlayer.userId })
+          .getOne();
+
+        if (!user) {
+          throw new NotFoundException('Linked user not found');
+        }
+        if (Number(user.chips) < totalCost) {
+          throw new BadRequestException('INSUFFICIENT_CHIPS');
+        }
+        user.chips = Number(user.chips) - totalCost;
+        await manager.save(user);
+      }
+
+      const toCreate: BingoGiftedCardCredit[] = [];
+      for (let i = 0; i < quantity; i++) {
+        toCreate.push(
+          manager.create(BingoGiftedCardCredit, {
+            recipientPlayerId: toPlayer.id,
+            betAmount: unitCost,
+            giftedByPlayerId: fromPlayer.id,
+            giftedByDisplayName: fromPlayer.displayName ?? fromPlayer.username,
+          }),
+        );
+      }
+      const savedCredits = await manager.save(toCreate);
+
+      // Same reasoning as a normal card purchase - the room's superbingo pool grows in real time
+      // on any money actually spent, gifting included.
+      if (totalCost > 0) {
+        const pool = await this.getOrCreateSuperbingoForRoom(roomId, manager);
+        pool.amount = Number(pool.amount) + Math.round(totalCost * 0.1);
+        pool.lastUpdatedAt = new Date();
+        await manager.save(pool);
+      }
+
+      return {
+        credits: savedCredits,
+        fromDisplayName: fromPlayer.displayName ?? fromPlayer.username,
+        toDisplayName: toPlayer.displayName ?? toPlayer.username,
+      };
+    });
+  }
+
+  /** Generic system chat message (ej. gift announcements) - distinct from announceWinners' more
+   *  specific winner-formatted messages, though both end up as the same
+   *  BingoChatMessageType.SYSTEM row. */
+  private async sendSystemMessage(roomId: string, message: string): Promise<ChatMessageEntry> {
+    const entity = this.chatMessageRepository.create({
+      roomId,
+      playerId: null,
+      userId: null,
+      displayName: 'Sistema',
+      role: null,
+      message,
+      type: BingoChatMessageType.SYSTEM,
+      createdAt: new Date(),
+    });
+    const saved = await this.chatMessageRepository.save(entity);
+    return this.toChatMessageEntry(saved);
+  }
+
+  /** Grouped by price tier so the client can show "tenés 3 cartones gratis para esta sala" per
+   *  room without having to fetch/filter the raw list itself. */
+  async getPendingGiftedCreditsSummary(playerId: string): Promise<{ betAmount: number; count: number }[]> {
+    const pending = await this.giftedCardCreditRepository.find({
+      where: { recipientPlayerId: playerId, redeemedAt: IsNull() },
+    });
+
+    const countByTier = new Map<number, number>();
+    for (const credit of pending) {
+      const tier = Number(credit.betAmount);
+      countByTier.set(tier, (countByTier.get(tier) ?? 0) + 1);
+    }
+
+    return Array.from(countByTier.entries()).map(([betAmount, count]) => ({ betAmount, count }));
   }
 
   private async cleanupInvalidCards(gameId: string): Promise<void> {

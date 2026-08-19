@@ -14,6 +14,7 @@ function buildService(dataSourceOverrides: any = {}) {
     winner: { find: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v), delete: jest.fn() },
     audit: { create: jest.fn((v: any) => v), save: jest.fn() },
     chat: { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v) },
+    giftedCredit: { find: jest.fn(), findOne: jest.fn(), save: jest.fn(), create: jest.fn((v: any) => v) },
   };
 
   const dataSource = {
@@ -32,6 +33,7 @@ function buildService(dataSourceOverrides: any = {}) {
     repos.winner as any,
     repos.audit as any,
     repos.chat as any,
+    repos.giftedCredit as any,
     dataSource as any,
   );
 
