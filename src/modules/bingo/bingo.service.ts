@@ -204,17 +204,16 @@ export class BingoService {
     // resets after being awarded. Scaled to the room's stakes (30x the card price) so a 10-chip
     // room and a 250000-chip room don't share the same base pot.
     const withSuperbingoBase = (betAmount: number) => ({ mode: 'classic', chipsRequired: betAmount, superbingoBaseAmount: betAmount * 30 });
-    const defaultRooms = [
-      { name: 'Sala 250000', type: BingoRoomType.PUBLIC, betAmount: 250000, maxPlayers: 8, config: withSuperbingoBase(250000) },
-      { name: 'Sala 100000', type: BingoRoomType.PUBLIC, betAmount: 100000, maxPlayers: 8, config: withSuperbingoBase(100000) },
-      { name: 'Sala 50000', type: BingoRoomType.PUBLIC, betAmount: 50000, maxPlayers: 8, config: withSuperbingoBase(50000) },
-      { name: 'Sala 10000', type: BingoRoomType.PUBLIC, betAmount: 10000, maxPlayers: 8, config: withSuperbingoBase(10000) },
-      { name: 'Sala 5000', type: BingoRoomType.PUBLIC, betAmount: 5000, maxPlayers: 8, config: withSuperbingoBase(5000) },
-      { name: 'Sala 1000', type: BingoRoomType.PUBLIC, betAmount: 1000, maxPlayers: 8, config: withSuperbingoBase(1000) },
-      { name: 'Sala 100', type: BingoRoomType.PUBLIC, betAmount: 100, maxPlayers: 8, config: withSuperbingoBase(100) },
-      { name: 'Sala 25', type: BingoRoomType.PUBLIC, betAmount: 25, maxPlayers: 8, config: withSuperbingoBase(25) },
-      { name: 'Sala 10', type: BingoRoomType.PUBLIC, betAmount: 10, maxPlayers: 8, config: withSuperbingoBase(10) },
-    ];
+    // Two rooms per price tier - `name` has to be unique (that's what dedupes this seed on every
+    // boot), the " (2)" suffix is what tells them apart; betAmount is what actually matters for
+    // gameplay/pricing and is identical between the two. See RoomDefinition.FormatRoomName on the
+    // Unity side, which preserves this suffix after collapsing the number to "250k" etc., so the
+    // two show up as "Sala 250k" and "Sala 250k (2)" instead of two identical-looking cards.
+    const tiers = [250000, 100000, 50000, 10000, 5000, 1000, 100, 25, 10];
+    const defaultRooms = tiers.flatMap((betAmount) => [
+      { name: `Sala ${betAmount}`, type: BingoRoomType.PUBLIC, betAmount, maxPlayers: 8, config: withSuperbingoBase(betAmount) },
+      { name: `Sala ${betAmount} (2)`, type: BingoRoomType.PUBLIC, betAmount, maxPlayers: 8, config: withSuperbingoBase(betAmount) },
+    ]);
 
     const created: BingoRoom[] = [];
 
@@ -656,6 +655,13 @@ export class BingoService {
 
       const superbingoWinner = winners.find((w) => w.winType === BingoWinType.SUPERBINGO);
       await this.finalizeSuperbingoPool(manager, game, !!superbingoWinner);
+
+      // Room list cards show "how much the last bingo here paid" - persisted on the room itself
+      // since BingoWinner rows for this game are about to get deleted a few lines down.
+      const bingoWinner = winners.find((w) => w.winType === BingoWinType.BINGO);
+      if (bingoWinner) {
+        await manager.update(BingoRoom, { id: game.roomId }, { lastBingoPrizeAmount: bingoWinner.prizeAmount });
+      }
 
       game.resultSummary = {
         ...game.persistedSnapshot?.plannedPrizeAmounts,

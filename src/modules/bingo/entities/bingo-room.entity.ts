@@ -49,6 +49,14 @@ export class BingoRoom {
   @Column({ type: 'jsonb', nullable: true })
   config: Record<string, any>;
 
+  /** Prize amount of the last BINGO (not línea/doble línea/superbingo) won in this room - shown on
+   *  the room list card so players can see "how much the last winner here got" before joining.
+   *  Survives across games (unlike BingoWinner rows, which get deleted when their game finishes) -
+   *  updated in BingoService.finishGameTransaction whenever a game that just finished had a bingo
+   *  winner. 0 until the room's very first bingo ever happens. */
+  @Column({ type: 'bigint', default: 0 })
+  lastBingoPrizeAmount: number;
+
   @CreateDateColumn()
   createdAt: Date;
 
