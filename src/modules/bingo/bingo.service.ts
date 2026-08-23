@@ -19,6 +19,7 @@ import { BingoAudit } from './entities/bingo-audit.entity';
 import { BingoChatMessage, BingoChatMessageType } from './entities/bingo-chat-message.entity';
 import { BingoGiftedCardCredit } from './entities/bingo-gifted-card-credit.entity';
 import { BingoNumberGuess } from './entities/bingo-number-guess.entity';
+import { BingoAutoBuySubscription } from './entities/bingo-auto-buy-subscription.entity';
 import { User } from '../users/entities/user.entity';
 import { CreatePlayerDto } from './dtos/create-player.dto';
 import { CreateRoomDto } from './dtos/create-room.dto';
@@ -76,6 +77,8 @@ export class BingoService {
     private readonly giftedCardCreditRepository: Repository<BingoGiftedCardCredit>,
     @InjectRepository(BingoNumberGuess)
     private readonly numberGuessRepository: Repository<BingoNumberGuess>,
+    @InjectRepository(BingoAutoBuySubscription)
+    private readonly autoBuySubscriptionRepository: Repository<BingoAutoBuySubscription>,
     @InjectDataSource()
     private readonly dataSource: DataSource,
   ) {}
@@ -330,6 +333,16 @@ export class BingoService {
     }
 
     await this.reservePoolForGame(saved.id, room.id).catch(() => undefined);
+
+    // Every caller that creates a genuinely NEW waiting game funnels through here (startGame's
+    // next-round pre-creation, finishGameTransaction, the engine's defensive fallback) - hooking
+    // it in this one place means "compra automática" runs for every one of them without having to
+    // remember to call it at each call site. Best-effort: a failure here must never break game
+    // creation itself.
+    await this.processAutoBuyForNewGame(saved).catch((err) =>
+      this.logger.warn(`processAutoBuyForNewGame failed for game=${saved.id}: ${(err as Error).message}`),
+    );
+
     return this.getGame(saved.id);
   }
 
@@ -848,11 +861,15 @@ export class BingoService {
       }
       await manager.save(player);
 
-      // The superbingo pool grows in real time as people buy, on top of its room-specific base
-      // value (e.g. base 30000, buy a 1000-chip card -> pool becomes 30100 = +10% of the cost).
-      if (totalCost > 0) {
+      // The superbingo pool grows in real time as cards actually enter play, on top of its
+      // room-specific base value (e.g. base 30000, a 1000-chip card -> pool becomes 30100 = +10%
+      // of its cost) - based on the FULL quantity, not just totalCost/chargeableQuantity, so
+      // cards covered by a previously-gifted credit grow the pool too. Gifting itself does NOT
+      // grow it (see giftCardsTransaction) - only actually playing a card should, whether it was
+      // paid for just now or was a gift redeemed just now.
+      if (quantity > 0) {
         const pool = await this.getOrCreateSuperbingoForRoom(game.roomId, manager);
-        pool.amount = Number(pool.amount) + Math.round(totalCost * 0.1);
+        pool.amount = Number(pool.amount) + Math.round(unitCost * quantity * 0.1);
         pool.lastUpdatedAt = new Date();
         if (!game.superbingoPoolId) {
           game.superbingoPoolId = pool.id;
@@ -873,21 +890,115 @@ export class BingoService {
   }
 
   // ---------------------------------------------------------------------
-  // Gifted card credits
+  // Auto-buy ("compra automática") - commits to buying `cardsPerGame` cards, in THIS room, for
+  // the next `totalGames` rounds, entirely server-side so it keeps running even if the player
+  // disconnects or closes the app - see processAutoBuyForNewGame, hooked into createGame().
   // ---------------------------------------------------------------------
 
-  async giftCards(fromPlayerId: string, toPlayerId: string, roomId: string, quantity: number): Promise<{ credits: BingoGiftedCardCredit[]; chatEntry: ChatMessageEntry }> {
+  private static readonly AUTO_BUY_MAX_CARDS_PER_GAME = 24;
+  private static readonly AUTO_BUY_MAX_GAMES = 100;
+
+  async setAutoBuy(playerId: string, roomId: string, cardsPerGame: number, totalGames: number): Promise<BingoAutoBuySubscription> {
+    if (!Number.isInteger(cardsPerGame) || cardsPerGame < 1 || cardsPerGame > BingoService.AUTO_BUY_MAX_CARDS_PER_GAME) {
+      throw new BadRequestException(`cardsPerGame must be between 1 and ${BingoService.AUTO_BUY_MAX_CARDS_PER_GAME}`);
+    }
+    if (!Number.isInteger(totalGames) || totalGames < 1 || totalGames > BingoService.AUTO_BUY_MAX_GAMES) {
+      throw new BadRequestException(`totalGames must be between 1 and ${BingoService.AUTO_BUY_MAX_GAMES}`);
+    }
+
+    await this.getPlayer(playerId);
+    await this.getRoom(roomId);
+
+    // One active subscription per player per room (see the partial unique index in the
+    // migration) - replace whatever was configured before instead of stacking a second one.
+    const existing = await this.autoBuySubscriptionRepository.findOne({ where: { playerId, roomId, active: true } });
+    if (existing) {
+      existing.cardsPerGame = cardsPerGame;
+      existing.remainingGames = totalGames;
+      return this.autoBuySubscriptionRepository.save(existing);
+    }
+
+    const created = this.autoBuySubscriptionRepository.create({ playerId, roomId, cardsPerGame, remainingGames: totalGames, active: true });
+    return this.autoBuySubscriptionRepository.save(created);
+  }
+
+  async cancelAutoBuy(playerId: string, roomId: string): Promise<void> {
+    await this.autoBuySubscriptionRepository.update({ playerId, roomId, active: true }, { active: false });
+  }
+
+  /** Always returns a well-formed object (never null) so the client can parse it without special
+   *  casing an empty body - active:false + zeros just means there's nothing running right now. */
+  async getAutoBuyStatus(playerId: string, roomId: string): Promise<{ active: boolean; cardsPerGame: number; remainingGames: number }> {
+    const subscription = await this.autoBuySubscriptionRepository.findOne({ where: { playerId, roomId, active: true } });
+    if (!subscription) {
+      return { active: false, cardsPerGame: 0, remainingGames: 0 };
+    }
+    return { active: true, cardsPerGame: subscription.cardsPerGame, remainingGames: subscription.remainingGames };
+  }
+
+  /**
+   * Called right after a NEW waiting game is created for a room (see createGame) - buys each
+   * active subscriber their configured quantity for THIS round, through the exact same
+   * purchaseCard() path a manual purchase uses (same chip debit, 24-card cap, level progress,
+   * superbingo growth). A failed attempt (ej. insufficient chips) deactivates the subscription
+   * immediately instead of silently retrying forever every round - the player finds out either
+   * way, via a system chat message.
+   */
+  private async processAutoBuyForNewGame(game: BingoGame): Promise<void> {
+    const subscriptions = await this.autoBuySubscriptionRepository.find({ where: { roomId: game.roomId, active: true } });
+    if (subscriptions.length === 0) {
+      return;
+    }
+
+    for (const subscription of subscriptions) {
+      try {
+        await this.purchaseCard(game.id, subscription.playerId, {
+          playerId: subscription.playerId,
+          quantity: subscription.cardsPerGame,
+        });
+
+        subscription.remainingGames -= 1;
+        subscription.active = subscription.remainingGames > 0;
+        await this.autoBuySubscriptionRepository.save(subscription);
+
+        if (!subscription.active) {
+          await this.notifyAutoBuyEnded(subscription, 'se completó tu compra automática en esta sala.');
+        }
+      } catch (err) {
+        subscription.active = false;
+        await this.autoBuySubscriptionRepository.save(subscription);
+        const reason = (err as Error).message === 'INSUFFICIENT_CHIPS' ? 'no te alcanzaron las fichas' : 'ocurrió un error';
+        await this.notifyAutoBuyEnded(subscription, `tu compra automática en esta sala se detuvo: ${reason}.`);
+        this.logger.warn(`processAutoBuyForNewGame: subscription=${subscription.id} failed and was deactivated: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  private async notifyAutoBuyEnded(subscription: BingoAutoBuySubscription, message: string): Promise<void> {
+    const player = await this.playerRepository.findOne({ where: { id: subscription.playerId } });
+    const name = player?.displayName ?? player?.username ?? 'Jugador';
+    await this.sendSystemMessage(subscription.roomId, `${name}: ${message}`).catch(() => undefined);
+  }
+
+  // ---------------------------------------------------------------------
+  // Gifted cards (player-to-player - redeemed immediately, see giftCardsTransaction) and gifted
+  // card CREDITS (the number-guessing mini-game's reward, still uses BingoGiftedCardCredit since
+  // its winner isn't necessarily looking at a purchasable game the instant they win - see
+  // announceNumberGuessWinners)
+  // ---------------------------------------------------------------------
+
+  async giftCards(fromPlayerId: string, toPlayerId: string, roomId: string, quantity: number): Promise<{ cardsCreated: number; chatEntry: ChatMessageEntry }> {
     const startedAt = Date.now();
     this.logger.log(`giftCards:begin from=${fromPlayerId} to=${toPlayerId} roomId=${roomId} quantity=${quantity}`);
     try {
       const result = await this.giftCardsTransaction(fromPlayerId, toPlayerId, roomId, quantity);
-      const cardWord = result.credits.length === 1 ? 'cartón' : 'cartones';
+      const cardWord = result.cardsCreated === 1 ? 'cartón' : 'cartones';
       const chatEntry = await this.sendSystemMessage(
         roomId,
-        `${result.fromDisplayName} le regaló ${result.credits.length} ${cardWord} a ${result.toDisplayName}.`,
+        `${result.fromDisplayName} le regaló ${result.cardsCreated} ${cardWord} a ${result.toDisplayName}.`,
       );
       this.logger.log(`giftCards:done from=${fromPlayerId} to=${toPlayerId} tookMs=${Date.now() - startedAt}`);
-      return { credits: result.credits, chatEntry };
+      return { cardsCreated: result.cardsCreated, chatEntry };
     } catch (err) {
       this.logger.warn(`giftCards:failed from=${fromPlayerId} to=${toPlayerId} tookMs=${Date.now() - startedAt} error=${(err as Error).message}`);
       throw err;
@@ -899,7 +1010,7 @@ export class BingoService {
     toPlayerId: string,
     roomId: string,
     quantity: number,
-  ): Promise<{ credits: BingoGiftedCardCredit[]; fromDisplayName: string; toDisplayName: string }> {
+  ): Promise<{ cardsCreated: number; fromDisplayName: string; toDisplayName: string }> {
     if (!Number.isInteger(quantity) || quantity <= 0) {
       throw new BadRequestException('Quantity must be a positive integer');
     }
@@ -926,6 +1037,21 @@ export class BingoService {
         throw new NotFoundException('Room not found');
       }
 
+      // Both players are already in THIS room by the time a gift is possible (GiftCardsPanelUI
+      // only lists players present here) - redeem straight into whichever WAITING game is
+      // currently open for purchases (the room's own next round, or the pre-created "next round"
+      // one if the primary game here is already RUNNING) instead of a credit the recipient would
+      // have to come back and manually spend later - the cards show up for them immediately.
+      const waitingGames = await manager.find(BingoGame, {
+        where: { roomId, state: BingoGameState.WAITING },
+        order: { createdAt: 'DESC' },
+        take: 1,
+      });
+      const targetGame = waitingGames[0];
+      if (!targetGame) {
+        throw new BadRequestException('No hay una ronda abierta para regalar cartones en esta sala ahora mismo.');
+      }
+
       const unitCost = Number(room.config?.chipsRequired ?? room.betAmount ?? 0);
       const totalCost = unitCost * quantity;
 
@@ -946,30 +1072,77 @@ export class BingoService {
         await manager.save(user);
       }
 
-      const toCreate: BingoGiftedCardCredit[] = [];
+      // Same auto-join + 24-cap rules as a normal purchase (see purchaseCardTransaction).
+      let recipientTicket = await manager.findOne(BingoTicket, { where: { gameId: targetGame.id, playerId: toPlayer.id } });
+      if (!recipientTicket) {
+        recipientTicket = await manager.save(
+          manager.create(BingoTicket, { gameId: targetGame.id, playerId: toPlayer.id, cardIds: [], cost: 0 }),
+        );
+      }
+      const existingCount = (recipientTicket.cardIds || []).length;
+      if (existingCount + quantity > 24) {
+        throw new BadRequestException('El destinatario no puede tener más de 24 cartones en esta ronda.');
+      }
+
+      const existingCards = await manager.find(BingoCard, { where: { gameId: targetGame.id, ownerId: toPlayer.id } });
+      const existingCardKeys = new Set(existingCards.map((card) => [...card.numbers].sort((a, b) => a - b).join(',')));
+
+      const toCreate: BingoCard[] = [];
       for (let i = 0; i < quantity; i++) {
+        const numbers = this.generateUniqueCardNumbers(existingCardKeys);
         toCreate.push(
-          manager.create(BingoGiftedCardCredit, {
-            recipientPlayerId: toPlayer.id,
-            betAmount: unitCost,
-            giftedByPlayerId: fromPlayer.id,
-            giftedByDisplayName: fromPlayer.displayName ?? fromPlayer.username,
+          manager.create(BingoCard, {
+            gameId: targetGame.id,
+            ownerId: toPlayer.id,
+            numbers,
+            marks: {},
+            isWinning: false,
+            claimedLines: [],
           }),
         );
       }
-      const savedCredits = await manager.save(toCreate);
+      const savedCards = await manager.save(toCreate);
+      recipientTicket.cardIds = [...(recipientTicket.cardIds || []), ...savedCards.map((c) => c.id)];
+      // Not recipientTicket.cost - that field tracks what the RECIPIENT spent, and they paid
+      // nothing; the gifter's chips were the ones debited above.
+      await manager.save(recipientTicket);
 
-      // Same reasoning as a normal card purchase - the room's superbingo pool grows in real time
-      // on any money actually spent, gifting included.
-      if (totalCost > 0) {
-        const pool = await this.getOrCreateSuperbingoForRoom(roomId, manager);
-        pool.amount = Number(pool.amount) + Math.round(totalCost * 0.1);
-        pool.lastUpdatedAt = new Date();
-        await manager.save(pool);
+      // Recipient's lifetime level progress counts these too - they're genuinely playing them.
+      toPlayer.totalCardsPurchased = Number(toPlayer.totalCardsPurchased) + quantity;
+      const newLevel = BingoService.computeLevelFromTotalCards(toPlayer.totalCardsPurchased);
+      if (newLevel !== toPlayer.level) {
+        toPlayer.level = newLevel;
       }
+      await manager.save(toPlayer);
+
+      // The pool grows because these cards are genuinely in play now - not at "gift time" in the
+      // abstract, which is what used to inflate it even if the recipient never touched the gift.
+      const pool = await this.getOrCreateSuperbingoForRoom(roomId, manager);
+      pool.amount = Number(pool.amount) + Math.round(unitCost * quantity * 0.1);
+      pool.lastUpdatedAt = new Date();
+      if (!targetGame.superbingoPoolId) {
+        targetGame.superbingoPoolId = pool.id;
+      }
+      await manager.save(pool);
+
+      if (!targetGame.persistedSnapshot?.purchaseStartedAt) {
+        targetGame.persistedSnapshot = { ...targetGame.persistedSnapshot, purchaseStartedAt: new Date().toISOString() };
+      }
+      await manager.save(targetGame);
+
+      // performedBy is the sender's real User.id (not the BingoPlayer id) so an admin can later
+      // query "cards this user gifted" directly against chips_awards-style userId filters.
+      await this.createAudit(
+        'bingo_game',
+        targetGame.id,
+        'gift_cards',
+        { fromPlayerId, toPlayerId, toUserId: toPlayer.userId ?? null, quantity, roomId, unitCost, totalCost },
+        fromPlayer.userId,
+        manager,
+      );
 
       return {
-        credits: savedCredits,
+        cardsCreated: savedCards.length,
         fromDisplayName: fromPlayer.displayName ?? fromPlayer.username,
         toDisplayName: toPlayer.displayName ?? toPlayer.username,
       };
@@ -1651,15 +1824,67 @@ export class BingoService {
     await manager.save(pool);
   }
 
-  async createAudit(entityType: string, entityId: string, action: string, payload: Record<string, any>, performedBy?: string): Promise<BingoAudit> {
-    const audit = this.auditRepository.create({
+  async createAudit(
+    entityType: string,
+    entityId: string,
+    action: string,
+    payload: Record<string, any>,
+    performedBy?: string,
+    manager?: EntityManager,
+  ): Promise<BingoAudit> {
+    const repo = manager ? manager.getRepository(BingoAudit) : this.auditRepository;
+    const audit = repo.create({
       entityType,
       entityId,
       action,
       payload,
       performedBy,
     });
-    return this.auditRepository.save(audit);
+    return repo.save(audit);
+  }
+
+  /** A user's bingo activity (winnings + cards gifted, both ways) — for the admin/mod "Actividad" view. */
+  async getUserBingoActivity(userId: string) {
+    const players = await this.playerRepository.find({ where: { userId } });
+    const playerIds = players.map((p) => p.id);
+
+    const winnings = playerIds.length
+      ? await this.winnerRepository.find({ where: { playerId: In(playerIds) }, order: { createdAt: 'DESC' }, take: 200 })
+      : [];
+
+    const giftsSent = await this.auditRepository
+      .createQueryBuilder('a')
+      .where('a.action = :action AND a.performedBy = :userId', { action: 'gift_cards', userId })
+      .orderBy('a.createdAt', 'DESC')
+      .take(200)
+      .getMany();
+
+    const giftsReceived = await this.auditRepository
+      .createQueryBuilder('a')
+      .where("a.action = :action AND a.payload->>'toUserId' = :userId", { action: 'gift_cards', userId })
+      .orderBy('a.createdAt', 'DESC')
+      .take(200)
+      .getMany();
+
+    const totalWon = winnings.reduce((sum, w) => sum + Number(w.prizeAmount), 0);
+    const cardsGiftedSent = giftsSent.reduce((sum, a) => sum + Number(a.payload?.quantity || 0), 0);
+    const cardsGiftedReceived = giftsReceived.reduce((sum, a) => sum + Number(a.payload?.quantity || 0), 0);
+
+    return {
+      summary: { totalWon, cardsGiftedSent, cardsGiftedReceived, winCount: winnings.length },
+      winnings,
+      giftsSent,
+      giftsReceived,
+    };
+  }
+
+  /** Bingo card gifts a specific admin/mod made themselves — for the admin-only mod-audit view. */
+  async getAuditsByPerformer(modId: string, action: string, limit = 200) {
+    return this.auditRepository.find({
+      where: { performedBy: modId, action },
+      order: { createdAt: 'DESC' },
+      take: limit,
+    });
   }
 
   // ---------------------------------------------------------------------
@@ -1723,9 +1948,19 @@ export class BingoService {
     [BingoWinType.SUPERBINGO]: 'superbingo',
   };
 
+  // línea/doble línea son femeninas ("la línea"), bingo/superbingo son masculinos ("el bingo") -
+  // sin esto el mensaje quedaría gramaticalmente mal para la mitad de los tipos de premio.
+  private static readonly WIN_TYPE_ARTICLES: Record<string, string> = {
+    [BingoWinType.LINE]: 'la',
+    [BingoWinType.DOUBLE_LINE]: 'la',
+    [BingoWinType.BINGO]: 'el',
+    [BingoWinType.SUPERBINGO]: 'el',
+  };
+
   private buildSystemWinnerMessageEntity(game: BingoGame, winner: BingoWinner, nick: string, createdAt: Date): BingoChatMessage {
     const label = BingoService.WIN_TYPE_LABELS[winner.winType] ?? winner.winType;
-    const message = `Han cantado ${label} en la bola ${winner.roundNumber}. ${nick} ha ganado ${Number(winner.prizeAmount)} fichas por ${label.charAt(0).toUpperCase()}${label.slice(1)}.`;
+    const article = BingoService.WIN_TYPE_ARTICLES[winner.winType] ?? 'el';
+    const message = `¡Felicitaciones ${nick}, has ganado ${article} ${label}!!! Premio de ${Number(winner.prizeAmount)} fichas en la bola ${winner.roundNumber}`;
     return this.chatMessageRepository.create({
       roomId: game.roomId,
       playerId: winner.playerId,

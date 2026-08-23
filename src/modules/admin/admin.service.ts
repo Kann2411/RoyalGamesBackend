@@ -5,6 +5,9 @@ import { User } from '../users/entities/user.entity';
 import { Pay } from '../payments/entities/pay.entity';
 import { Role } from '../../common/enums/role.enum';
 import { PaymentStatus } from '../payments/enums/payment-status.enum';
+import { ChipsService } from '../chips/chips.service';
+import { MinesService } from '../mines/mines.service';
+import { BingoService } from '../bingo/bingo.service';
 
 @Injectable()
 export class AdminService {
@@ -13,9 +16,12 @@ export class AdminService {
     private usersRepository: Repository<User>,
     @InjectRepository(Pay)
     private paysRepository: Repository<Pay>,
+    private chipsService: ChipsService,
+    private minesService: MinesService,
+    private bingoService: BingoService,
   ) {}
 
-  async getOverview() {
+  async getOverview(callerRole?: Role) {
     const [
       totalUsers,
       bannedUsers,
@@ -65,7 +71,7 @@ export class AdminService {
       ),
     ]);
 
-    return {
+    const overview = {
       totalUsers,
       bannedUsers,
       inactiveUsers,
@@ -80,6 +86,49 @@ export class AdminService {
       topByChips,
       recentPayments,
     };
+
+    // Mods get full operational visibility (users, online, signups, top players) but not
+    // platform-wide money figures — those stay admin-only per the owner's explicit request.
+    if (callerRole === Role.MOD) {
+      const { totalChipsInCirculation, totalChipsDeposited, depositsTodayChips, recentPayments: _rp, ...modSafe } = overview;
+      return modSafe;
+    }
+
+    return overview;
+  }
+
+  /**
+   * Cheap, count-only activity snapshot for a single user — drives the collapsed accordion
+   * headers in the admin/mod "Actividad" view without paying for full row lists up front.
+   */
+  async getUserActivitySummary(userId: string) {
+    const [chipsHistory, minesActivity, bingoActivity, paymentsCount] = await Promise.all([
+      this.chipsService.getHistory(userId),
+      this.minesService.getUserActivity(userId),
+      this.bingoService.getUserBingoActivity(userId),
+      this.paysRepository.count({ where: { userId } }),
+    ]);
+
+    return {
+      chipsMovements: chipsHistory.length,
+      mines: minesActivity.summary,
+      bingo: bingoActivity.summary,
+      paymentsCount,
+    };
+  }
+
+  /**
+   * What a given mod personally did: chip grants/removals from the admin panel, chips they
+   * gifted themselves as a player, and bingo cards they gifted — for the admin-only audit view.
+   */
+  async getModAudit(modId: string) {
+    const [panelGrants, selfGifts, cardGifts] = await Promise.all([
+      this.chipsService.getAwardsPerformedBy(modId),
+      this.chipsService.getOutgoingGifts(modId),
+      this.bingoService.getAuditsByPerformer(modId, 'gift_cards'),
+    ]);
+
+    return { panelGrants, selfGifts, cardGifts };
   }
 
   /**

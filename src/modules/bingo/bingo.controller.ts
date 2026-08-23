@@ -32,6 +32,14 @@ export class BingoController {
     return this.bingoService.getPendingGiftedCreditsSummary(id);
   }
 
+  /** Whether this player has "compra automática" running right now in this room, and how much of
+   *  it is left - lets the client show a small "quedan N x M partidas" panel even for a player who
+   *  set it up a while ago (or in a previous session) and just wants to confirm it's still going. */
+  @Get('players/:id/auto-buy/:roomId')
+  getAutoBuyStatus(@Param('id') id: string, @Param('roomId') roomId: string) {
+    return this.bingoService.getAutoBuyStatus(id, roomId);
+  }
+
   @Patch('players/:id')
   updatePlayer(@Param('id') id: string, @Body() body: Record<string, any>) {
     return this.bingoService.updatePlayer(id, body);

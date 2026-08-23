@@ -22,6 +22,12 @@ export class ChipsAward {
   @Column({ type: 'varchar', length: 50, nullable: true })
   game: string | null;
 
+  // Which admin/mod executed a manual panel grant/removal (source='admin' only) — lets an
+  // admin audit exactly who moved chips instead of just seeing the recipient. Null for
+  // game/welcome/gift/prize/referral awards, and for legacy rows from before this column existed.
+  @Column({ type: 'uuid', nullable: true })
+  performedBy: string | null;
+
   @CreateDateColumn()
   createdAt: Date;
 

@@ -35,6 +35,7 @@ import { UpdateUserDto } from './dtos/update-user.dto';
 import { ChangePasswordDto } from './dtos/change-password.dto';
 import { AdminSetEmailDto } from './dtos/admin-set-email.dto';
 import { AdminSetPasswordDto } from './dtos/admin-set-password.dto';
+import { AdminSetDescriptionDto } from './dtos/admin-set-description.dto';
 import { ManageUserDto } from './dtos/manage-user.dto';
 import { AdminUserDto } from './dtos/admin-user.dto';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
@@ -257,6 +258,20 @@ export class UsersController {
   ) {
     await this.usersService.adminSetPassword(userId, dto.newPassword);
     return { message: 'Password updated successfully' };
+  }
+
+  @Patch('admin/users/:userId/description')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.MOD)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Edit another user's profile description (Admin/Mod)" })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Description updated successfully' })
+  async adminSetDescription(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Body() dto: AdminSetDescriptionDto,
+  ) {
+    return this.usersService.adminSetDescription(userId, dto.description);
   }
 
   @Put('firstchips/:userId')

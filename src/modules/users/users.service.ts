@@ -238,6 +238,23 @@ export class UsersService {
     return userWithoutPassword;
   }
 
+  /**
+   * Admin/mod editing another user's profile description (e.g. to clean up
+   * inappropriate content) — separate from the self-only `actualizar-usuario` route.
+   */
+  async adminSetDescription(userId: string, description: string): Promise<Partial<User>> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    const updatedUser = await this.usersRepository.update(userId, { description });
+    if (!updatedUser) {
+      throw new NotFoundException('User not found');
+    }
+    const { password, ...userWithoutPassword } = updatedUser;
+    return userWithoutPassword;
+  }
+
   async deleteUser(id: string): Promise<void> {
     const user = await this.usersRepository.findById(id);
     if (!user) {

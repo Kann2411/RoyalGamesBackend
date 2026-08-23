@@ -36,6 +36,14 @@ export interface GuessNumberMessage {
   number: number;
 }
 
+/** Sets up (or replaces) "compra automática" for the room the sender is currently connected to -
+ *  see BingoService.setAutoBuy. Runs server-side every new round regardless of whether the player
+ *  is still connected - see BingoService.processAutoBuyForNewGame. */
+export interface SetAutoBuyMessage {
+  cardsPerGame: number;
+  totalGames: number;
+}
+
 // ---- Server -> Client ----
 
 export interface PlayerSummary {

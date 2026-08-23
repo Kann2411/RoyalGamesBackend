@@ -21,6 +21,7 @@ export class ChipsService {
     chipsTransactionDto: ChipsTransactionDto,
     source: ChipsAwardSource = 'game',
     game: string | null = null,
+    performedBy: string | null = null,
   ): Promise<Partial<User>> {
     const currentChips = await this.chipsRepository.getChips(
       chipsTransactionDto.userId,
@@ -39,7 +40,13 @@ export class ChipsService {
       throw new NotFoundException('User not found');
     }
 
-    await this.chipsRepository.logAward(chipsTransactionDto.userId, chipsTransactionDto.amount, source, source === 'game' ? game : null);
+    await this.chipsRepository.logAward(
+      chipsTransactionDto.userId,
+      chipsTransactionDto.amount,
+      source,
+      source === 'game' ? game : null,
+      source === 'admin' ? performedBy : null,
+    );
 
     const { password, ...userWithoutPassword } = updatedUser;
     return userWithoutPassword;
@@ -48,6 +55,7 @@ export class ChipsService {
   async removeChips(
     chipsTransactionDto: ChipsTransactionDto,
     source: ChipsAwardSource = 'game',
+    performedBy: string | null = null,
   ): Promise<Partial<User>> {
     const currentChips = await this.chipsRepository.getChips(
       chipsTransactionDto.userId,
@@ -74,7 +82,7 @@ export class ChipsService {
     // logged here — they'd otherwise net against the chips_awards sum the "top winners"
     // leaderboard relies on, turning "chips won" into "net profit" without being asked to.
     if (source === 'admin') {
-      await this.chipsRepository.logAward(chipsTransactionDto.userId, -chipsTransactionDto.amount, source);
+      await this.chipsRepository.logAward(chipsTransactionDto.userId, -chipsTransactionDto.amount, source, null, performedBy);
     }
 
     const { password, ...userWithoutPassword } = updatedUser;
@@ -172,5 +180,15 @@ export class ChipsService {
     return [...depositEntries, ...awardEntries].sort(
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime(),
     );
+  }
+
+  /** Manual panel chip grants/removals a given admin/mod executed — for the mod-audit view. */
+  async getAwardsPerformedBy(modId: string, limit = 200) {
+    return this.chipsRepository.findAwardsPerformedBy(modId, limit);
+  }
+
+  /** Chips a given user gifted away to other players themselves — for the mod-audit view. */
+  async getOutgoingGifts(userId: string, limit = 200) {
+    return this.chipsRepository.findOutgoingGifts(userId, limit);
   }
 }

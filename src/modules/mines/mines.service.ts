@@ -226,6 +226,25 @@ export class MinesService {
     return 5000 + (minesCount - 5) * 1000;
   }
 
+  /** A user's Mines round history — for the admin/mod "Actividad" view. */
+  async getUserActivity(userId: string) {
+    const rounds = await this.dataSource.manager.find(MinesRound, {
+      where: { userId },
+      order: { createdAt: 'DESC' },
+      take: 200,
+    });
+
+    const totalWagered = rounds.reduce((sum, r) => sum + Number(r.betAmount), 0);
+    const totalWon = rounds
+      .filter((r) => r.status === 'cashed_out')
+      .reduce((sum, r) => sum + Number(r.accumulatedWinnings), 0);
+
+    return {
+      summary: { totalRounds: rounds.length, totalWagered, totalWon },
+      rounds,
+    };
+  }
+
   private generateMinePositions(minesCount: number): number[] {
     const positions = new Set<number>();
     while (positions.size < minesCount) {

@@ -24,5 +24,6 @@ import { BingoModule } from '../bingo/bingo.module';
   ],
   controllers: [MinesController],
   providers: [MinesService, MinesSessionGuard],
+  exports: [MinesService],
 })
 export class MinesModule {}

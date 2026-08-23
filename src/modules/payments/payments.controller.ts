@@ -129,9 +129,11 @@ export class PaymentsController {
   }
 
   // ============= GENERAL =============
+  // Global feed of every payment across every user — a platform-wide money summary, so this
+  // stays admin-only. Mods needing to help ONE customer use getUserPayments below instead.
   @Get('payments')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(Role.ADMIN, Role.MOD)
+  @Roles(Role.ADMIN)
   @ApiOperation({ summary: 'Get all payments (Admin only)' })
   @ApiResponse({ status: 200, description: 'Payments retrieved successfully' })
   async getAllPayments() {
@@ -140,14 +142,15 @@ export class PaymentsController {
 
   @Get('payments/user/:userId')
   @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Get user payments (self or admin)' })
+  @ApiOperation({ summary: 'Get user payments (self, admin, or mod — a support tool for one specific customer)' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'User payments retrieved successfully' })
   async getUserPayments(
     @Param('userId', new ParseUUIDPipe()) userId: string,
     @CurrentUser() currentUser: any,
   ) {
-    if (currentUser.id !== userId && currentUser.role !== Role.ADMIN) {
+    const isStaff = currentUser.role === Role.ADMIN || currentUser.role === Role.MOD;
+    if (currentUser.id !== userId && !isStaff) {
       throw new ForbiddenException('Cannot view another user\'s payments');
     }
     return this.paymentsService.getUserPayments(userId);

@@ -23,6 +23,8 @@ import { ChipsTransactionDto } from './dtos/chips-transaction.dto';
 import { GiftChipsDto } from './dtos/gift-chips.dto';
 import { OptionalJwtAuthGuard } from '../../common/guards/optional-jwt-auth.guard';
 import { JwtAuthGuard } from '../../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../../common/guards/roles.guard';
+import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { Role } from '../../common/enums/role.enum';
 import { resolveGameSlugFromOrigin } from '../../common/constants/game-origins';
@@ -49,10 +51,11 @@ export class ChipsController {
     @Headers('origin') origin?: string,
     @Headers('referer') referer?: string,
   ) {
-    const source = user?.role === Role.ADMIN || user?.role === Role.MOD ? 'admin' : 'game';
+    const isStaff = user?.role === Role.ADMIN || user?.role === Role.MOD;
+    const source = isStaff ? 'admin' : 'game';
     const refererOrigin = referer ? referer.split('/').slice(0, 3).join('/') : undefined;
     const game = resolveGameSlugFromOrigin(origin) || resolveGameSlugFromOrigin(refererOrigin);
-    return this.chipsService.addChips(chipsTransactionDto, source, game);
+    return this.chipsService.addChips(chipsTransactionDto, source, game, isStaff ? user.id : null);
   }
 
   @Put('remove/chips')
@@ -63,8 +66,9 @@ export class ChipsController {
   @ApiResponse({ status: 400, description: 'Insufficient chips' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async removeChips(@Body() chipsTransactionDto: ChipsTransactionDto, @CurrentUser() user: any) {
-    const source = user?.role === Role.ADMIN || user?.role === Role.MOD ? 'admin' : 'game';
-    return this.chipsService.removeChips(chipsTransactionDto, source);
+    const isStaff = user?.role === Role.ADMIN || user?.role === Role.MOD;
+    const source = isStaff ? 'admin' : 'game';
+    return this.chipsService.removeChips(chipsTransactionDto, source, isStaff ? user.id : null);
   }
 
   // Real chip-to-chip transfer between two logged-in users (the profile's "Regalar Fichas"
@@ -87,6 +91,16 @@ export class ChipsController {
   @ApiOperation({ summary: 'My chip movement history (deposits + non-game adjustments, no gameplay)' })
   async getHistory(@CurrentUser() user: any) {
     return this.chipsService.getHistory(user.id);
+  }
+
+  @Get('admin/users/:userId/chips-history')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(Role.ADMIN, Role.MOD)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "A specific user's chip movement history (Admin/Mod)" })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  async getUserHistory(@Param('userId', new ParseUUIDPipe()) userId: string) {
+    return this.chipsService.getHistory(userId);
   }
 
   @Get('chips/:userId')

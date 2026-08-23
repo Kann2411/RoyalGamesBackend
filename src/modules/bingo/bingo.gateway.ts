@@ -10,6 +10,7 @@ import {
   ChatSendMessage,
   GiftCardsMessage,
   GuessNumberMessage,
+  SetAutoBuyMessage,
   PresenceEntry,
   RoomStatePayload,
   UpdateMarksMessage,
@@ -121,6 +122,12 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
         case 'guess_number':
           await this.handleGuessNumber(meta.playerId, meta.ipAddress, envelope.payload as GuessNumberMessage);
           break;
+        case 'set_auto_buy':
+          await this.handleSetAutoBuy(meta.roomId, meta.playerId, envelope.payload as SetAutoBuyMessage);
+          break;
+        case 'cancel_auto_buy':
+          await this.handleCancelAutoBuy(meta.roomId, meta.playerId);
+          break;
         case 'ping':
           this.registry.sendTo(client, { type: 'pong', payload: { serverTime: new Date().toISOString() } });
           break;
@@ -158,6 +165,16 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
    *  try/catch in handleMessage -> sendError. */
   private async handleGuessNumber(playerId: string, ipAddress: string | null, payload: GuessNumberMessage): Promise<void> {
     await this.bingoService.submitNumberGuess(payload?.gameId, playerId, ipAddress, payload?.number);
+  }
+
+  /** No broadcast afterward - configuring auto-buy doesn't buy anything right now, it just sets
+   *  up what processAutoBuyForNewGame will do starting with this room's next round. */
+  private async handleSetAutoBuy(roomId: string, playerId: string, payload: SetAutoBuyMessage): Promise<void> {
+    await this.bingoService.setAutoBuy(playerId, roomId, payload?.cardsPerGame, payload?.totalGames);
+  }
+
+  private async handleCancelAutoBuy(roomId: string, playerId: string): Promise<void> {
+    await this.bingoService.cancelAutoBuy(playerId, roomId);
   }
 
   private async handleGiftCards(roomId: string, playerId: string, payload: GiftCardsMessage): Promise<void> {
