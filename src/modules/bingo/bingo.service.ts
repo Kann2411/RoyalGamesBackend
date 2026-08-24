@@ -877,12 +877,22 @@ export class BingoService {
         await manager.save(pool);
       }
 
+      // Same guard as ensurePurchaseWindowStarted: don't start THIS game's 30s countdown while
+      // the room's CURRENT game is still RUNNING - it can't transition to RUNNING itself until
+      // that one finishes anyway, so counting down now would silently burn through the window in
+      // the background (ej. buying ahead into the pre-created next round, or an auto-buy
+      // subscription firing the instant that next round gets created) - by the time the running
+      // game actually finishes, this one would already read as "expired" and skip the wait
+      // entirely instead of giving players a real 30s purchase window.
       if (!game.persistedSnapshot?.purchaseStartedAt) {
-        game.persistedSnapshot = {
-          ...game.persistedSnapshot,
-          purchaseStartedAt: new Date().toISOString(),
-        };
-        await manager.save(game);
+        const runningGame = await manager.findOne(BingoGame, { where: { roomId: game.roomId, state: BingoGameState.RUNNING } });
+        if (!runningGame) {
+          game.persistedSnapshot = {
+            ...game.persistedSnapshot,
+            purchaseStartedAt: new Date().toISOString(),
+          };
+          await manager.save(game);
+        }
       }
 
       return { ticket: existingTicket, cards: savedCards };
@@ -912,14 +922,26 @@ export class BingoService {
     // One active subscription per player per room (see the partial unique index in the
     // migration) - replace whatever was configured before instead of stacking a second one.
     const existing = await this.autoBuySubscriptionRepository.findOne({ where: { playerId, roomId, active: true } });
+    let subscription: BingoAutoBuySubscription;
     if (existing) {
       existing.cardsPerGame = cardsPerGame;
       existing.remainingGames = totalGames;
-      return this.autoBuySubscriptionRepository.save(existing);
+      subscription = await this.autoBuySubscriptionRepository.save(existing);
+    } else {
+      const created = this.autoBuySubscriptionRepository.create({ playerId, roomId, cardsPerGame, remainingGames: totalGames, active: true });
+      subscription = await this.autoBuySubscriptionRepository.save(created);
     }
 
-    const created = this.autoBuySubscriptionRepository.create({ playerId, roomId, cardsPerGame, remainingGames: totalGames, active: true });
-    return this.autoBuySubscriptionRepository.save(created);
+    // If this room already has a WAITING game open right now, buy into THAT round immediately
+    // too - not just the ones created from here on. processAutoBuyForNewGame only fires when a
+    // NEW game gets created (see createGame), so without this, the round the player is actually
+    // looking at when they set this up would just sit there untouched until the NEXT one starts.
+    const { waiting } = await this.getRoomActiveGames(roomId);
+    if (waiting && subscription.active) {
+      await this.runAutoBuySubscription(subscription, waiting);
+    }
+
+    return subscription;
   }
 
   async cancelAutoBuy(playerId: string, roomId: string): Promise<void> {
@@ -946,31 +968,37 @@ export class BingoService {
    */
   private async processAutoBuyForNewGame(game: BingoGame): Promise<void> {
     const subscriptions = await this.autoBuySubscriptionRepository.find({ where: { roomId: game.roomId, active: true } });
-    if (subscriptions.length === 0) {
-      return;
-    }
-
     for (const subscription of subscriptions) {
-      try {
-        await this.purchaseCard(game.id, subscription.playerId, {
-          playerId: subscription.playerId,
-          quantity: subscription.cardsPerGame,
-        });
+      await this.runAutoBuySubscription(subscription, game);
+    }
+  }
 
-        subscription.remainingGames -= 1;
-        subscription.active = subscription.remainingGames > 0;
-        await this.autoBuySubscriptionRepository.save(subscription);
+  /** Buys `subscription.cardsPerGame` cards into `game` for one auto-buy subscription, through
+   *  the exact same purchaseCard() path a manual purchase uses (same chip debit, 24-card cap,
+   *  level progress, superbingo growth). A failed attempt (ej. insufficient chips) deactivates
+   *  the subscription immediately instead of silently retrying forever every round - the player
+   *  finds out either way, via a system chat message. Shared by processAutoBuyForNewGame (every
+   *  future round) and setAutoBuy (the round already open right when they set this up). */
+  private async runAutoBuySubscription(subscription: BingoAutoBuySubscription, game: BingoGame): Promise<void> {
+    try {
+      await this.purchaseCard(game.id, subscription.playerId, {
+        playerId: subscription.playerId,
+        quantity: subscription.cardsPerGame,
+      });
 
-        if (!subscription.active) {
-          await this.notifyAutoBuyEnded(subscription, 'se completó tu compra automática en esta sala.');
-        }
-      } catch (err) {
-        subscription.active = false;
-        await this.autoBuySubscriptionRepository.save(subscription);
-        const reason = (err as Error).message === 'INSUFFICIENT_CHIPS' ? 'no te alcanzaron las fichas' : 'ocurrió un error';
-        await this.notifyAutoBuyEnded(subscription, `tu compra automática en esta sala se detuvo: ${reason}.`);
-        this.logger.warn(`processAutoBuyForNewGame: subscription=${subscription.id} failed and was deactivated: ${(err as Error).message}`);
+      subscription.remainingGames -= 1;
+      subscription.active = subscription.remainingGames > 0;
+      await this.autoBuySubscriptionRepository.save(subscription);
+
+      if (!subscription.active) {
+        await this.notifyAutoBuyEnded(subscription, 'se completó tu compra automática en esta sala.');
       }
+    } catch (err) {
+      subscription.active = false;
+      await this.autoBuySubscriptionRepository.save(subscription);
+      const reason = (err as Error).message === 'INSUFFICIENT_CHIPS' ? 'no te alcanzaron las fichas' : 'ocurrió un error';
+      await this.notifyAutoBuyEnded(subscription, `tu compra automática en esta sala se detuvo: ${reason}.`);
+      this.logger.warn(`runAutoBuySubscription: subscription=${subscription.id} failed and was deactivated: ${(err as Error).message}`);
     }
   }
 
@@ -1125,8 +1153,15 @@ export class BingoService {
       }
       await manager.save(pool);
 
+      // Same guard as purchaseCardTransaction/ensurePurchaseWindowStarted - don't start targetGame's
+      // 30s countdown while the room's CURRENT game is still RUNNING, or it silently expires in
+      // the background before that one even finishes (see the long comment in
+      // purchaseCardTransaction for the full failure mode this avoids).
       if (!targetGame.persistedSnapshot?.purchaseStartedAt) {
-        targetGame.persistedSnapshot = { ...targetGame.persistedSnapshot, purchaseStartedAt: new Date().toISOString() };
+        const runningGame = await manager.findOne(BingoGame, { where: { roomId, state: BingoGameState.RUNNING } });
+        if (!runningGame) {
+          targetGame.persistedSnapshot = { ...targetGame.persistedSnapshot, purchaseStartedAt: new Date().toISOString() };
+        }
       }
       await manager.save(targetGame);
 
