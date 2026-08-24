@@ -194,7 +194,7 @@ export class BingoService {
       name: dto.name,
       type: dto.type ?? BingoRoomType.PUBLIC,
       betAmount: dto.betAmount ?? 0,
-      maxPlayers: dto.maxPlayers ?? 8,
+      maxPlayers: dto.maxPlayers ?? 100,
       isActive: true,
       config: dto.config ?? {},
     });
@@ -214,8 +214,8 @@ export class BingoService {
     // two show up as "Sala 250k" and "Sala 250k (2)" instead of two identical-looking cards.
     const tiers = [250000, 100000, 50000, 10000, 5000, 1000, 100, 25, 10];
     const defaultRooms = tiers.flatMap((betAmount) => [
-      { name: `Sala ${betAmount}`, type: BingoRoomType.PUBLIC, betAmount, maxPlayers: 8, config: withSuperbingoBase(betAmount) },
-      { name: `Sala ${betAmount} (2)`, type: BingoRoomType.PUBLIC, betAmount, maxPlayers: 8, config: withSuperbingoBase(betAmount) },
+      { name: `Sala ${betAmount}`, type: BingoRoomType.PUBLIC, betAmount, maxPlayers: 100, config: withSuperbingoBase(betAmount) },
+      { name: `Sala ${betAmount} (2)`, type: BingoRoomType.PUBLIC, betAmount, maxPlayers: 100, config: withSuperbingoBase(betAmount) },
     ]);
 
     const created: BingoRoom[] = [];
@@ -683,12 +683,20 @@ export class BingoService {
       game.persistedSnapshot = { ...game.persistedSnapshot, state: BingoGameState.FINISHED };
       await manager.save(game);
 
+      // Capture who was actually playing THIS game before its cards get deleted below - needed
+      // right after to resolve auto-buy for the next round now that this one is really over (see
+      // processAutoBuyForFinishedGame - deliberately NOT done back when this game started, so
+      // cancelling auto-buy mid-round still has an effect instead of the purchase having already
+      // fired the instant this round began).
+      const cardsInFinishedGame = await manager.find(BingoCard, { where: { gameId }, select: ['ownerId'] });
+      const playerIdsInFinishedGame = Array.from(new Set(cardsInFinishedGame.map((c) => c.ownerId)));
+
       await manager.delete(BingoCard, { gameId });
       await manager.delete(BingoTicket, { gameId });
       await manager.delete(BingoRound, { gameId });
       await manager.delete(BingoWinner, { gameId });
 
-      return { game, winners, skipped: false };
+      return { game, winners, skipped: false, playerIdsInFinishedGame };
     });
 
     const nextGame = await this.createGame({ roomId: result.game.roomId, config: {} });
@@ -700,6 +708,10 @@ export class BingoService {
       // unless a tick was somehow missed.
       await this.announceWinners(result.game, result.winners).catch((err) =>
         this.logger.warn(`announceWinners failed for game=${result.game.id}: ${(err as Error).message}`),
+      );
+
+      await this.processAutoBuyForFinishedGame(result.game.roomId, result.playerIdsInFinishedGame ?? []).catch((err) =>
+        this.logger.warn(`processAutoBuyForFinishedGame failed for room=${result.game.roomId}: ${(err as Error).message}`),
       );
     }
 
@@ -938,7 +950,13 @@ export class BingoService {
     // looking at when they set this up would just sit there untouched until the NEXT one starts.
     const { waiting } = await this.getRoomActiveGames(roomId);
     if (waiting && subscription.active) {
-      await this.runAutoBuySubscription(subscription, waiting);
+      const result = await this.runAutoBuySubscription(subscription, waiting);
+      if (!result.success) {
+        // The subscription itself is already saved (deactivated) at this point - this throw is
+        // just so the player finds out INSTANTLY, over the socket, instead of only via the system
+        // chat message (which they may not be looking at) or the status panel silently vanishing.
+        throw new BadRequestException(result.errorMessage ?? 'AUTO_BUY_FAILED');
+      }
     }
 
     return subscription;
@@ -965,11 +983,60 @@ export class BingoService {
    * superbingo growth). A failed attempt (ej. insufficient chips) deactivates the subscription
    * immediately instead of silently retrying forever every round - the player finds out either
    * way, via a system chat message.
+   *
+   * A subscriber currently PLAYING the room's RUNNING game (if any) is skipped here on purpose -
+   * `game` was just pre-created by startGame() the INSTANT that running game started, so buying
+   * into it right now would mean cancelling auto-buy anytime during that round has no effect (the
+   * purchase already happened before the round they're watching even got going). Those subscribers
+   * get resolved instead once the running game actually finishes - see
+   * processAutoBuyForFinishedGame - giving them the whole round to cancel if they want to.
    */
   private async processAutoBuyForNewGame(game: BingoGame): Promise<void> {
     const subscriptions = await this.autoBuySubscriptionRepository.find({ where: { roomId: game.roomId, active: true } });
+    if (subscriptions.length === 0) {
+      return;
+    }
+
+    const runningGame = await this.gameRepository.findOne({ where: { roomId: game.roomId, state: BingoGameState.RUNNING } });
+
     for (const subscription of subscriptions) {
+      if (runningGame) {
+        const cardsInRunningGame = await this.cardRepository.count({ where: { gameId: runningGame.id, ownerId: subscription.playerId } });
+        if (cardsInRunningGame > 0) {
+          continue;
+        }
+      }
+
       await this.runAutoBuySubscription(subscription, game);
+    }
+  }
+
+  /**
+   * Companion to processAutoBuyForNewGame - resolves auto-buy for whoever was actually playing
+   * the game that just finished (that method deliberately skipped them). By now the room's next
+   * WAITING game already exists (createGame(), called just before this in finishGameTransaction)
+   * - `playerIdsInFinishedGame` has to be passed in rather than looked up here, since the
+   * finished game's BingoCard rows are already deleted by the time this runs.
+   */
+  private async processAutoBuyForFinishedGame(roomId: string, playerIdsInFinishedGame: string[]): Promise<void> {
+    if (playerIdsInFinishedGame.length === 0) {
+      return;
+    }
+
+    const subscriptions = await this.autoBuySubscriptionRepository.find({
+      where: { roomId, active: true, playerId: In(playerIdsInFinishedGame) },
+    });
+    if (subscriptions.length === 0) {
+      return;
+    }
+
+    const { waiting } = await this.getRoomActiveGames(roomId);
+    if (!waiting) {
+      return;
+    }
+
+    for (const subscription of subscriptions) {
+      await this.runAutoBuySubscription(subscription, waiting);
     }
   }
 
@@ -978,8 +1045,9 @@ export class BingoService {
    *  level progress, superbingo growth). A failed attempt (ej. insufficient chips) deactivates
    *  the subscription immediately instead of silently retrying forever every round - the player
    *  finds out either way, via a system chat message. Shared by processAutoBuyForNewGame (every
-   *  future round) and setAutoBuy (the round already open right when they set this up). */
-  private async runAutoBuySubscription(subscription: BingoAutoBuySubscription, game: BingoGame): Promise<void> {
+   *  future round) and setAutoBuy (the round already open right when they set this up) - the
+   *  latter uses the returned result to also surface the failure directly over the socket. */
+  private async runAutoBuySubscription(subscription: BingoAutoBuySubscription, game: BingoGame): Promise<{ success: boolean; errorMessage?: string }> {
     try {
       await this.purchaseCard(game.id, subscription.playerId, {
         playerId: subscription.playerId,
@@ -993,12 +1061,15 @@ export class BingoService {
       if (!subscription.active) {
         await this.notifyAutoBuyEnded(subscription, 'se completó tu compra automática en esta sala.');
       }
+      return { success: true };
     } catch (err) {
       subscription.active = false;
       await this.autoBuySubscriptionRepository.save(subscription);
-      const reason = (err as Error).message === 'INSUFFICIENT_CHIPS' ? 'no te alcanzaron las fichas' : 'ocurrió un error';
+      const message = (err as Error).message;
+      const reason = message === 'INSUFFICIENT_CHIPS' ? 'no te alcanzaron las fichas' : 'ocurrió un error';
       await this.notifyAutoBuyEnded(subscription, `tu compra automática en esta sala se detuvo: ${reason}.`);
-      this.logger.warn(`runAutoBuySubscription: subscription=${subscription.id} failed and was deactivated: ${(err as Error).message}`);
+      this.logger.warn(`runAutoBuySubscription: subscription=${subscription.id} failed and was deactivated: ${message}`);
+      return { success: false, errorMessage: message };
     }
   }
 

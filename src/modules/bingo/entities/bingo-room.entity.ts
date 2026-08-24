@@ -29,7 +29,7 @@ export class BingoRoom {
   @Column({ type: 'bigint', default: 0 })
   betAmount: number;
 
-  @Column({ type: 'int', default: 8 })
+  @Column({ type: 'int', default: 100 })
   maxPlayers: number;
 
   @Column({ type: 'boolean', default: true })
