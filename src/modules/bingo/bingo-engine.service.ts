@@ -164,6 +164,12 @@ export class BingoEngineService implements OnModuleInit {
     for (const entry of announced) {
       this.gateway.broadcastChatMessage(roomId, entry);
     }
+    if (announced.length > 0) {
+      // announceDueWinners just credited chips for whoever won (see BingoService.announceWinners)
+      // - a fresh room_state is what actually delivers those updated balances to everyone's chat
+      // player list (presence.chips), not just the chat message announcing it.
+      await this.gateway.broadcastRoomState(roomId);
+    }
 
     if (!progress.isFinished) {
       return;

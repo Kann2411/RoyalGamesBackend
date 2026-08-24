@@ -183,6 +183,13 @@ export class BingoGateway implements OnGatewayConnection, OnGatewayDisconnect {
     // Refreshes everyone's presence.chips in this room - the gifter's nav bar chip counter needs
     // to see the debit immediately, same as a normal card purchase does.
     await this.broadcastRoomState(roomId);
+    // Gifted cards land as pending credits now (see BingoService.giftCardsTransaction), not real
+    // cards - a room_state alone doesn't tell the RECIPIENT's client anything changed, since their
+    // card count didn't move. This targeted push is what makes their gifted-cards panel update
+    // right away instead of only catching up whenever they next happen to buy something.
+    if (payload?.targetPlayerId) {
+      this.registry.sendToPlayer(roomId, payload.targetPlayerId, { type: 'gifted_credits_updated', payload: {} });
+    }
   }
 
   /** Same broadcast handleChatSend does above, but for server-originated system messages (ej. a

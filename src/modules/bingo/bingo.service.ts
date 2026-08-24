@@ -654,17 +654,11 @@ export class BingoService {
       const game = await manager.findOneOrFail(BingoGame, { where: { id: gameId } });
       const winners = await manager.find(BingoWinner, { where: { gameId } });
 
-      const totalsByPlayer = new Map<string, number>();
-      for (const winner of winners) {
-        totalsByPlayer.set(winner.playerId, (totalsByPlayer.get(winner.playerId) ?? 0) + Number(winner.prizeAmount));
-      }
-      for (const [playerId, amount] of totalsByPlayer) {
-        if (amount <= 0) continue;
-        const player = await manager.findOne(BingoPlayer, { where: { id: playerId } });
-        if (player?.userId) {
-          await manager.increment(User, { id: player.userId }, 'chips', amount);
-        }
-      }
+      // Chips themselves are NOT credited here anymore - announceWinners() does that the instant
+      // each winner is actually announced (in real time, mid-game, via BingoEngineService's tick),
+      // instead of everyone's balance jumping all at once only once the whole game ends. The call
+      // to announceWinners() below (a safety net for anything a tick somehow missed) still catches
+      // - and credits - any winner that slipped through uncredited by the time we get here.
 
       const superbingoWinner = winners.find((w) => w.winType === BingoWinType.SUPERBINGO);
       await this.finalizeSuperbingoPool(manager, game, !!superbingoWinner);
@@ -1080,10 +1074,13 @@ export class BingoService {
   }
 
   // ---------------------------------------------------------------------
-  // Gifted cards (player-to-player - redeemed immediately, see giftCardsTransaction) and gifted
-  // card CREDITS (the number-guessing mini-game's reward, still uses BingoGiftedCardCredit since
-  // its winner isn't necessarily looking at a purchasable game the instant they win - see
-  // announceNumberGuessWinners)
+  // Gifted cards (player-to-player) and gifted card CREDITS (the number-guessing mini-game's
+  // reward) both land as BingoGiftedCardCredit rows, redeemed the same way - the "usar cartones
+  // gratis" button or a normal purchase, whenever the recipient gets around to it (see
+  // purchaseCardTransaction, which auto-redeems these before charging chips). A gift must NOT turn
+  // into real BingoCards the instant it's sent: the recipient might already be sitting at (or
+  // close to) the 24-card cap for the currently open round, and there's no such thing as "too many
+  // pending credits" the way there's a hard 24-per-game ceiling on actual purchased cards.
   // ---------------------------------------------------------------------
 
   async giftCards(fromPlayerId: string, toPlayerId: string, roomId: string, quantity: number): Promise<{ cardsCreated: number; chatEntry: ChatMessageEntry }> {
@@ -1136,21 +1133,6 @@ export class BingoService {
         throw new NotFoundException('Room not found');
       }
 
-      // Both players are already in THIS room by the time a gift is possible (GiftCardsPanelUI
-      // only lists players present here) - redeem straight into whichever WAITING game is
-      // currently open for purchases (the room's own next round, or the pre-created "next round"
-      // one if the primary game here is already RUNNING) instead of a credit the recipient would
-      // have to come back and manually spend later - the cards show up for them immediately.
-      const waitingGames = await manager.find(BingoGame, {
-        where: { roomId, state: BingoGameState.WAITING },
-        order: { createdAt: 'DESC' },
-        take: 1,
-      });
-      const targetGame = waitingGames[0];
-      if (!targetGame) {
-        throw new BadRequestException('No hay una ronda abierta para regalar cartones en esta sala ahora mismo.');
-      }
-
       const unitCost = Number(room.config?.chipsRequired ?? room.betAmount ?? 0);
       const totalCost = unitCost * quantity;
 
@@ -1171,76 +1153,27 @@ export class BingoService {
         await manager.save(user);
       }
 
-      // Same auto-join + 24-cap rules as a normal purchase (see purchaseCardTransaction).
-      let recipientTicket = await manager.findOne(BingoTicket, { where: { gameId: targetGame.id, playerId: toPlayer.id } });
-      if (!recipientTicket) {
-        recipientTicket = await manager.save(
-          manager.create(BingoTicket, { gameId: targetGame.id, playerId: toPlayer.id, cardIds: [], cost: 0 }),
-        );
-      }
-      const existingCount = (recipientTicket.cardIds || []).length;
-      if (existingCount + quantity > 24) {
-        throw new BadRequestException('El destinatario no puede tener más de 24 cartones en esta ronda.');
-      }
-
-      const existingCards = await manager.find(BingoCard, { where: { gameId: targetGame.id, ownerId: toPlayer.id } });
-      const existingCardKeys = new Set(existingCards.map((card) => [...card.numbers].sort((a, b) => a - b).join(',')));
-
-      const toCreate: BingoCard[] = [];
-      for (let i = 0; i < quantity; i++) {
-        const numbers = this.generateUniqueCardNumbers(existingCardKeys);
-        toCreate.push(
-          manager.create(BingoCard, {
-            gameId: targetGame.id,
-            ownerId: toPlayer.id,
-            numbers,
-            marks: {},
-            isWinning: false,
-            claimedLines: [],
-          }),
-        );
-      }
-      const savedCards = await manager.save(toCreate);
-      recipientTicket.cardIds = [...(recipientTicket.cardIds || []), ...savedCards.map((c) => c.id)];
-      // Not recipientTicket.cost - that field tracks what the RECIPIENT spent, and they paid
-      // nothing; the gifter's chips were the ones debited above.
-      await manager.save(recipientTicket);
-
-      // Recipient's lifetime level progress counts these too - they're genuinely playing them.
-      toPlayer.totalCardsPurchased = Number(toPlayer.totalCardsPurchased) + quantity;
-      const newLevel = BingoService.computeLevelFromTotalCards(toPlayer.totalCardsPurchased);
-      if (newLevel !== toPlayer.level) {
-        toPlayer.level = newLevel;
-      }
-      await manager.save(toPlayer);
-
-      // The pool grows because these cards are genuinely in play now - not at "gift time" in the
-      // abstract, which is what used to inflate it even if the recipient never touched the gift.
-      const pool = await this.getOrCreateSuperbingoForRoom(roomId, manager);
-      pool.amount = Number(pool.amount) + Math.round(unitCost * quantity * 0.1);
-      pool.lastUpdatedAt = new Date();
-      if (!targetGame.superbingoPoolId) {
-        targetGame.superbingoPoolId = pool.id;
-      }
-      await manager.save(pool);
-
-      // Same guard as purchaseCardTransaction/ensurePurchaseWindowStarted - don't start targetGame's
-      // 30s countdown while the room's CURRENT game is still RUNNING, or it silently expires in
-      // the background before that one even finishes (see the long comment in
-      // purchaseCardTransaction for the full failure mode this avoids).
-      if (!targetGame.persistedSnapshot?.purchaseStartedAt) {
-        const runningGame = await manager.findOne(BingoGame, { where: { roomId, state: BingoGameState.RUNNING } });
-        if (!runningGame) {
-          targetGame.persistedSnapshot = { ...targetGame.persistedSnapshot, purchaseStartedAt: new Date().toISOString() };
-        }
-      }
-      await manager.save(targetGame);
+      // Land as pending credits, exactly like a "guess the first number" reward (see
+      // announceNumberGuessWinners) - NOT real cards. The recipient sees these in their "cartones
+      // regalados"/free-cards panel right away (BingoGateway pushes a targeted refresh signal
+      // below) and only actually becomes the owner of real BingoCards once they hit "usar", which
+      // routes through the normal purchaseCardTransaction - the same 24-per-game cap and pool
+      // growth rules as any other purchase apply there, unconditionally on gift size.
+      const creditsToCreate = Array.from({ length: quantity }, () =>
+        manager.create(BingoGiftedCardCredit, {
+          recipientPlayerId: toPlayer.id,
+          betAmount: unitCost,
+          giftedByPlayerId: fromPlayer.id,
+          giftedByDisplayName: fromPlayer.displayName ?? fromPlayer.username,
+        }),
+      );
+      await manager.save(creditsToCreate);
 
       // performedBy is the sender's real User.id (not the BingoPlayer id) so an admin can later
       // query "cards this user gifted" directly against chips_awards-style userId filters.
       await this.createAudit(
-        'bingo_game',
-        targetGame.id,
+        'bingo_room',
+        roomId,
         'gift_cards',
         { fromPlayerId, toPlayerId, toUserId: toPlayer.userId ?? null, quantity, roomId, unitCost, totalCost },
         fromPlayer.userId,
@@ -1248,7 +1181,7 @@ export class BingoService {
       );
 
       return {
-        cardsCreated: savedCards.length,
+        cardsCreated: creditsToCreate.length,
         fromDisplayName: fromPlayer.displayName ?? fromPlayer.username,
         toDisplayName: toPlayer.displayName ?? toPlayer.username,
       };
@@ -1544,49 +1477,76 @@ export class BingoService {
     const globalDoubleLineRound = Math.min(...perCard.map((c) => c.doubleLineRound));
     const plannedWinnerEvents: PlannedWinnerEvent[] = [];
 
-    for (const { card, lineRound, doubleLineRound, bingoRound } of perCard) {
-      if (lineRound === globalLineRound && lineRound <= plannedEndRound) {
-        plannedWinnerEvents.push({
-          playerId: card.ownerId,
-          cardId: card.id,
-          winType: BingoWinType.LINE,
-          prizeAmount: prizeAmounts.line,
-          roundNumber: lineRound,
-        });
-      }
+    // Ties (2+ cards - one player's own multiple cards, or different players - reaching the same
+    // prize on the exact same round) SPLIT that category's fixed pool instead of each card getting
+    // the full amount; every tied card used to be pushed with the whole `prizeAmounts.line` (etc.),
+    // which multiplied the total payout instead of dividing it among the winners.
+    const lineWinners = perCard.filter((c) => c.lineRound === globalLineRound && c.lineRound <= plannedEndRound);
+    const lineShares = this.splitPrizeEvenly(prizeAmounts.line, lineWinners.length);
 
-      if (doubleLineRound === globalDoubleLineRound && doubleLineRound <= plannedEndRound) {
-        plannedWinnerEvents.push({
-          playerId: card.ownerId,
-          cardId: card.id,
-          winType: BingoWinType.DOUBLE_LINE,
-          prizeAmount: prizeAmounts.doubleLine,
-          roundNumber: doubleLineRound,
-        });
-      }
+    const doubleLineWinners = perCard.filter(
+      (c) => c.doubleLineRound === globalDoubleLineRound && c.doubleLineRound <= plannedEndRound,
+    );
+    const doubleLineShares = this.splitPrizeEvenly(prizeAmounts.doubleLine, doubleLineWinners.length);
 
-      if (bingoRound === plannedEndRound) {
-        plannedWinnerEvents.push({
-          playerId: card.ownerId,
-          cardId: card.id,
-          winType: BingoWinType.BINGO,
-          prizeAmount: prizeAmounts.bingo,
-          roundNumber: bingoRound,
-        });
+    const bingoWinners = perCard.filter((c) => c.bingoRound === plannedEndRound);
+    const bingoShares = this.splitPrizeEvenly(prizeAmounts.bingo, bingoWinners.length);
+    const superbingoEligible = bingoWinners.filter((c) => c.bingoRound <= superbingoThreshold);
+    const superbingoShares = this.splitPrizeEvenly(superbingoPoolAmount, superbingoEligible.length);
 
-        if (bingoRound <= superbingoThreshold) {
-          plannedWinnerEvents.push({
-            playerId: card.ownerId,
-            cardId: card.id,
-            winType: BingoWinType.SUPERBINGO,
-            prizeAmount: superbingoPoolAmount,
-            roundNumber: bingoRound,
-          });
-        }
-      }
-    }
+    lineWinners.forEach(({ card, lineRound }, index) => {
+      plannedWinnerEvents.push({
+        playerId: card.ownerId,
+        cardId: card.id,
+        winType: BingoWinType.LINE,
+        prizeAmount: lineShares[index],
+        roundNumber: lineRound,
+      });
+    });
+
+    doubleLineWinners.forEach(({ card, doubleLineRound }, index) => {
+      plannedWinnerEvents.push({
+        playerId: card.ownerId,
+        cardId: card.id,
+        winType: BingoWinType.DOUBLE_LINE,
+        prizeAmount: doubleLineShares[index],
+        roundNumber: doubleLineRound,
+      });
+    });
+
+    bingoWinners.forEach(({ card, bingoRound }, index) => {
+      plannedWinnerEvents.push({
+        playerId: card.ownerId,
+        cardId: card.id,
+        winType: BingoWinType.BINGO,
+        prizeAmount: bingoShares[index],
+        roundNumber: bingoRound,
+      });
+    });
+
+    superbingoEligible.forEach(({ card, bingoRound }, index) => {
+      plannedWinnerEvents.push({
+        playerId: card.ownerId,
+        cardId: card.id,
+        winType: BingoWinType.SUPERBINGO,
+        prizeAmount: superbingoShares[index],
+        roundNumber: bingoRound,
+      });
+    });
 
     return { plannedEndRound, plannedWinnerEvents };
+  }
+
+  /** Splits an integer pool evenly across `winnerCount` winners with no leftover/lost chips: the
+   *  remainder from integer division goes one-each to the first few winners (order doesn't matter,
+   *  ties are already simultaneous) instead of being rounded away or left uncredited. */
+  private splitPrizeEvenly(totalAmount: number, winnerCount: number): number[] {
+    if (winnerCount <= 0) {
+      return [];
+    }
+    const base = Math.floor(totalAmount / winnerCount);
+    const remainder = totalAmount - base * winnerCount;
+    return Array.from({ length: winnerCount }, (_, index) => base + (index < remainder ? 1 : 0));
   }
 
   private validateCustomCardNumbers(numbers: number[], existingCardKeys: Set<string>): number[] {
@@ -2094,15 +2054,37 @@ export class BingoService {
     const playerIds = Array.from(new Set(pending.map((w) => w.playerId)));
     const players = await this.getPlayersByIds(playerIds);
     const nameById = new Map(players.map((p) => [p.id, p.displayName ?? p.username]));
+    const userIdByPlayerId = new Map(players.map((p) => [p.id, p.userId]));
 
     const now = new Date();
     const entities = pending.map((w) => this.buildSystemWinnerMessageEntity(game, w, nameById.get(w.playerId) ?? 'Jugador', now));
-    const saved = await this.chatMessageRepository.save(entities);
 
-    for (const winner of pending) {
-      winner.chatAnnouncedAt = now;
-    }
-    await this.winnerRepository.save(pending);
+    const saved = await this.dataSource.transaction(async (manager) => {
+      // Credit each winner's real chip balance THE INSTANT their win is announced - whether
+      // that's live mid-game (the common case) or via finishGameTransaction's safety net - instead
+      // of batching every prize from the whole game into one lump credit only once it ends. Lets
+      // the nav bar and the chat's player list reflect each prize as it actually happens.
+      const totalsByPlayer = new Map<string, number>();
+      for (const winner of pending) {
+        totalsByPlayer.set(winner.playerId, (totalsByPlayer.get(winner.playerId) ?? 0) + Number(winner.prizeAmount));
+      }
+      for (const [playerId, amount] of totalsByPlayer) {
+        if (amount <= 0) continue;
+        const userId = userIdByPlayerId.get(playerId);
+        if (userId) {
+          await manager.increment(User, { id: userId }, 'chips', amount);
+        }
+      }
+
+      const savedMessages = await manager.save(entities);
+
+      for (const winner of pending) {
+        winner.chatAnnouncedAt = now;
+      }
+      await manager.save(pending);
+
+      return savedMessages;
+    });
 
     return saved.map((m) => this.toChatMessageEntry(m));
   }

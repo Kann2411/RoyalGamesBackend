@@ -66,6 +66,22 @@ export class BingoConnectionRegistry {
     }
   }
 
+  /** Targets every open socket a specific player has in a room (usually one, but nothing stops
+   *  the same account from being connected twice) - used for pushes that only that player cares
+   *  about, ej. "you just received gifted-card credits", instead of a full room broadcast. */
+  sendToPlayer(roomId: string, playerId: string, envelope: WsEnvelope): void {
+    const sockets = this.roomSockets.get(roomId);
+    if (!sockets) {
+      return;
+    }
+    const message = JSON.stringify(envelope);
+    for (const socket of sockets) {
+      if (socket.readyState === socket.OPEN && this.socketMeta.get(socket)?.playerId === playerId) {
+        socket.send(message);
+      }
+    }
+  }
+
   broadcastToRoom(roomId: string, envelope: WsEnvelope, exclude?: WebSocket): void {
     const sockets = this.roomSockets.get(roomId);
     if (!sockets) {

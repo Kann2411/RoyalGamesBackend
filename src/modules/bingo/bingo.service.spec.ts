@@ -185,6 +185,69 @@ describe('BingoService', () => {
       expect(plannedWinnerEvents.some((e: any) => e.winType === BingoWinType.SUPERBINGO)).toBe(false);
       expect(plannedWinnerEvents.some((e: any) => e.winType === BingoWinType.BINGO)).toBe(true);
     });
+
+    it('splits (does not multiply) the prize when two cards complete the same win on the same round - both when they belong to one player and when they belong to two', () => {
+      const { service } = buildService();
+      const plannedDraws = Array.from({ length: 90 }, (_, i) => i + 1);
+      // Identical number layouts (same numbers) -> identical line/bingo rounds, guaranteeing a tie
+      // regardless of which specific numbers were picked. Two cards for the SAME player...
+      const numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+      const cardA1 = { id: 'card-a1', ownerId: 'player-a', numbers };
+      const cardA2 = { id: 'card-a2', ownerId: 'player-a', numbers };
+      const unitCost = 100;
+
+      // The pool itself (calculatePrizeAmounts) scales with how many CARDS are in the game, so the
+      // right baseline to compare a 2-card tie against is "what the pool for 2 cards is", not what
+      // a single-card game's smaller pool would have been.
+      const poolForTwoCards = (service as any).calculatePrizeAmounts(2, unitCost);
+      const tied = (service as any).planWinnerEvents([cardA1, cardA2], plannedDraws, 90, 1000, unitCost);
+
+      const lineEvents = tied.plannedWinnerEvents.filter((e: any) => e.winType === BingoWinType.LINE);
+      const bingoEvents = tied.plannedWinnerEvents.filter((e: any) => e.winType === BingoWinType.BINGO);
+      const superbingoEvents = tied.plannedWinnerEvents.filter((e: any) => e.winType === BingoWinType.SUPERBINGO);
+
+      expect(lineEvents).toHaveLength(2);
+      expect(bingoEvents).toHaveLength(2);
+      expect(superbingoEvents).toHaveLength(2);
+
+      // The two tied cards' shares must sum back to exactly the pool - split, not multiplied.
+      expect(lineEvents.reduce((sum: number, e: any) => sum + e.prizeAmount, 0)).toBe(poolForTwoCards.line);
+      expect(bingoEvents.reduce((sum: number, e: any) => sum + e.prizeAmount, 0)).toBe(poolForTwoCards.bingo);
+      expect(superbingoEvents.reduce((sum: number, e: any) => sum + e.prizeAmount, 0)).toBe(1000);
+
+      // Each tied card gets an equal half, not the full amount each (the bug being fixed here).
+      expect(lineEvents[0].prizeAmount).toBe(poolForTwoCards.line / 2);
+      expect(bingoEvents.every((e: any) => e.prizeAmount === poolForTwoCards.bingo / 2)).toBe(true);
+
+      // ...and the same split applies across two DIFFERENT players tying, not just one player's
+      // own multiple cards.
+      const cardB = { id: 'card-b', ownerId: 'player-b', numbers };
+      const acrossPlayers = (service as any).planWinnerEvents([cardA1, cardB], plannedDraws, 90, 1000, unitCost);
+      const crossBingoEvents = acrossPlayers.plannedWinnerEvents.filter((e: any) => e.winType === BingoWinType.BINGO);
+      expect(crossBingoEvents).toHaveLength(2);
+      expect(new Set(crossBingoEvents.map((e: any) => e.playerId))).toEqual(new Set(['player-a', 'player-b']));
+      expect(crossBingoEvents.every((e: any) => e.prizeAmount === poolForTwoCards.bingo / 2)).toBe(true);
+    });
+
+    it('splits an unevenly-divisible prize among 3+ tied winners without losing or creating any chips', () => {
+      const { service } = buildService();
+      const plannedDraws = Array.from({ length: 90 }, (_, i) => i + 1);
+      const numbers = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+      const cards = [
+        { id: 'card-1', ownerId: 'player-1', numbers },
+        { id: 'card-2', ownerId: 'player-2', numbers },
+        { id: 'card-3', ownerId: 'player-3', numbers },
+      ];
+
+      // Pool amount (100) does not divide evenly by 3 - the remainder must be handed out one-each
+      // instead of rounded away (which would silently destroy chips) or left on one winner only.
+      const { plannedWinnerEvents } = (service as any).planWinnerEvents(cards, plannedDraws, 90, 100, 100);
+
+      const superbingoEvents = plannedWinnerEvents.filter((e: any) => e.winType === BingoWinType.SUPERBINGO);
+      expect(superbingoEvents).toHaveLength(3);
+      expect(superbingoEvents.reduce((sum: number, e: any) => sum + e.prizeAmount, 0)).toBe(100);
+      expect(superbingoEvents.every((e: any) => e.prizeAmount === 33 || e.prizeAmount === 34)).toBe(true);
+    });
   });
 
   describe('purchaseCard', () => {
