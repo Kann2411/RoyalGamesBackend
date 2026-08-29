@@ -11,6 +11,7 @@ export const ORIGIN_TO_GAME_SLUG: Record<string, string> = {
   'https://minas2royal.s3.us-east-2.amazonaws.com': 'minas',
   'https://royaljoker1.s3.us-east-2.amazonaws.com': 'royal-joker',
   'https://bingoroyal.s3.us-east-2.amazonaws.com': 'bingo',
+  'https://santawilds.s3.us-east-2.amazonaws.com': 'santawilds',
 };
 
 export function resolveGameSlugFromOrigin(origin: string | undefined | null): string | null {
