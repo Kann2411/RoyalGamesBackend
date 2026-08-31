@@ -12,7 +12,7 @@ import { User } from './entities/user.entity';
 import { Role } from '../../common/enums/role.enum';
 import { RankTier } from '../../common/enums/rank-tier.enum';
 import { ChipsAward } from '../chips/entities/chips-award.entity';
-import { DEFAULT_AVATAR_BUFFER, DEFAULT_AVATAR_MIME, DEFAULT_AVATAR_DATA } from '../../common/constants/default-avatar';
+import { DEFAULT_AVATAR_BUFFER, DEFAULT_AVATAR_MIME, DEFAULT_AVATAR_DATA, DEFAULT_AVATAR_THUMB_BUFFER } from '../../common/constants/default-avatar';
 import { MailingService } from '../mailing/mailing.service';
 import * as crypto from 'crypto';
 
@@ -98,6 +98,8 @@ export class UsersService {
         avatarBin: DEFAULT_AVATAR_BUFFER,
         avatarMime: DEFAULT_AVATAR_MIME,
         avatarData: DEFAULT_AVATAR_DATA,
+        avatarThumbBin: DEFAULT_AVATAR_THUMB_BUFFER,
+        avatarThumbMime: DEFAULT_AVATAR_MIME,
       }),
       referralCode,
       referredBy,
@@ -409,7 +411,12 @@ export class UsersService {
   }
 
 
-  async updateAvatarWithFile(userId: string, file: Express.Multer.File, avatarData?: any): Promise<Partial<User>> {
+  async updateAvatarWithFile(
+    userId: string,
+    file?: Express.Multer.File,
+    avatarData?: any,
+    thumbFile?: Express.Multer.File,
+  ): Promise<Partial<User>> {
     const user = await this.usersRepository.findById(userId);
     if (!user) {
       throw new NotFoundException('User not found');
@@ -417,15 +424,18 @@ export class UsersService {
 
     const buffer = file && file.buffer ? file.buffer : undefined;
     const mime = file && file.mimetype ? file.mimetype : undefined;
+    const thumbBuffer = thumbFile && thumbFile.buffer ? thumbFile.buffer : undefined;
+    const thumbMime = thumbFile && thumbFile.mimetype ? thumbFile.mimetype : undefined;
 
     console.log('Saving avatar for user', {
       userId,
       hasFile: !!file,
       fileInfo: file ? { originalname: file.originalname, mimetype: file.mimetype, size: file.size } : null,
+      hasThumbFile: !!thumbFile,
       avatarData,
     });
 
-    const updatedUser = await this.usersRepository.updateAvatar(userId, buffer, mime, avatarData);
+    const updatedUser = await this.usersRepository.updateAvatar(userId, buffer, mime, avatarData, thumbBuffer, thumbMime);
     if (!updatedUser) {
       throw new NotFoundException('User not found');
     }
@@ -448,6 +458,19 @@ export class UsersService {
     const user = await this.usersRepository.findById(userId);
     if (!user) {
       throw new NotFoundException('User not found');
+    }
+    return { buffer: user.avatarBin, mime: user.avatarMime };
+  }
+
+  async getAvatarThumbnailBinary(userId: string): Promise<{ buffer?: Buffer; mime?: string } | null> {
+    const user = await this.usersRepository.findById(userId);
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+    // Los avatares guardados antes de que existiera el thumbnail dedicado no tienen
+    // avatar_thumb_bin todavía; se cae al avatar completo para no dejar el nav sin imagen.
+    if (user.avatarThumbBin) {
+      return { buffer: user.avatarThumbBin, mime: user.avatarThumbMime };
     }
     return { buffer: user.avatarBin, mime: user.avatarMime };
   }

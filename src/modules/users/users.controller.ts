@@ -14,7 +14,7 @@ import {
   HttpStatus,
   HttpCode,
   ForbiddenException,
-  UploadedFile,
+  UploadedFiles,
   Res,
 } from '@nestjs/common';
 import {
@@ -25,7 +25,7 @@ import {
   ApiParam,
   ApiQuery,
 } from '@nestjs/swagger';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { Response } from 'express';
 import { UsersService } from './users.service';
@@ -286,17 +286,27 @@ export class UsersController {
   }
 
   @Put('user/:userId/avatar')
-  @UseInterceptors(FileInterceptor('avatar', { storage: memoryStorage() }))
-  @ApiOperation({ summary: 'Update user avatar image (multipart) and avatar JSON data' })
+  @UseInterceptors(
+    FileFieldsInterceptor(
+      [
+        { name: 'avatar', maxCount: 1 },
+        { name: 'avatarThumb', maxCount: 1 },
+      ],
+      { storage: memoryStorage() },
+    ),
+  )
+  @ApiOperation({ summary: 'Update user avatar image (multipart, optionally with a square thumbnail) and avatar JSON data' })
   @ApiParam({ name: 'userId', description: 'User UUID' })
   @ApiResponse({ status: 200, description: 'Avatar updated successfully' })
   @ApiResponse({ status: 403, description: 'Forbidden - Cannot update another user profile' })
   @ApiResponse({ status: 404, description: 'User not found' })
   async updateAvatar(
     @Param('userId', new ParseUUIDPipe()) userId: string,
-    @UploadedFile() file: Express.Multer.File,
+    @UploadedFiles() files: { avatar?: Express.Multer.File[]; avatarThumb?: Express.Multer.File[] },
     @Body() body: any,
   ) {
+    const file = files?.avatar?.[0];
+    const thumbFile = files?.avatarThumb?.[0];
     const avatarDataRaw = body?.avatarData;
     let avatarData: any = undefined;
 
@@ -316,10 +326,11 @@ export class UsersController {
     console.log('updateAvatar request', {
       userId,
       file: file ? { originalname: file.originalname, mimetype: file.mimetype, size: file.size } : null,
+      thumbFile: thumbFile ? { originalname: thumbFile.originalname, mimetype: thumbFile.mimetype, size: thumbFile.size } : null,
       avatarData,
     });
 
-    return this.usersService.updateAvatarWithFile(userId, file, avatarData);
+    return this.usersService.updateAvatarWithFile(userId, file, avatarData, thumbFile);
   }
 
   @Get('user/:userId/avatar-data')
@@ -341,6 +352,23 @@ export class UsersController {
     @Res() res: Response,
   ) {
     const result = await this.usersService.getAvatarBinary(userId);
+    if (!result || !result.buffer) {
+      throw new ForbiddenException('User or avatar not found');
+    }
+    res.setHeader('Content-Type', result.mime || 'application/octet-stream');
+    return res.send(result.buffer);
+  }
+
+  @Get('user/:userId/avatar-thumbnail')
+  @ApiOperation({ summary: 'Get user avatar thumbnail (square, head-focused crop) bytes' })
+  @ApiParam({ name: 'userId', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Avatar thumbnail retrieved' })
+  @ApiResponse({ status: 404, description: 'User not found' })
+  async getAvatarThumbnail(
+    @Param('userId', new ParseUUIDPipe()) userId: string,
+    @Res() res: Response,
+  ) {
+    const result = await this.usersService.getAvatarThumbnailBinary(userId);
     if (!result || !result.buffer) {
       throw new ForbiddenException('User or avatar not found');
     }

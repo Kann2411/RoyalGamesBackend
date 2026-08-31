@@ -67,13 +67,28 @@ export class UsersRepository {
     return this.findById(id);
   }
 
-  async updateAvatar(id: string, buffer?: Buffer, mime?: string, avatarData?: any): Promise<User | null> {
+  async updateAvatar(
+    id: string,
+    buffer?: Buffer,
+    mime?: string,
+    avatarData?: any,
+    thumbBuffer?: Buffer,
+    thumbMime?: string,
+  ): Promise<User | null> {
     const user = await this.findById(id);
     if (!user) return null;
     if (buffer !== undefined) user.avatarBin = buffer;
     if (mime !== undefined) user.avatarMime = mime;
     if (avatarData !== undefined) user.avatarData = avatarData;
-    console.log('Repository updateAvatar', { id, hasBuffer: !!buffer, mime, hasAvatarData: avatarData !== undefined });
+    if (thumbBuffer !== undefined) user.avatarThumbBin = thumbBuffer;
+    if (thumbMime !== undefined) user.avatarThumbMime = thumbMime;
+    console.log('Repository updateAvatar', {
+      id,
+      hasBuffer: !!buffer,
+      mime,
+      hasAvatarData: avatarData !== undefined,
+      hasThumbBuffer: !!thumbBuffer,
+    });
     return this.repository.save(user);
   }
 

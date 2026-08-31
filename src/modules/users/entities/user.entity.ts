@@ -34,6 +34,14 @@ export class User {
   @Column({ name: 'avatar_mime', type: 'varchar', nullable: true })
   avatarMime: string;
 
+  // Recorte cuadrado (cabeza/cuello) generado en Unity aparte del avatar completo, para
+  // mostrar en el nav y otros lugares chicos sin achicar el busto entero.
+  @Column({ name: 'avatar_thumb_bin', type: 'bytea', nullable: true })
+  avatarThumbBin: Buffer;
+
+  @Column({ name: 'avatar_thumb_mime', type: 'varchar', nullable: true })
+  avatarThumbMime: string;
+
   @Column({ type: 'jsonb', nullable: true })
   avatarData: any;
 
