@@ -19,7 +19,7 @@ export const DEFAULT_AVATAR_DATA = {
   "eyesIndex": 0,
   "hairColor": "#353333FF",
   "hairIndex": 0,
-  "headColor": "#D7A280FF",
+  "headColor": "#E6B996FF",
   "headIndex": 2,
   "noseIndex": 0,
   "beardColor": "#353333FF",
