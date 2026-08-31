@@ -81,6 +81,11 @@ export class UsersService {
       }
     }
 
+    // El avatar por defecto del Bazar (piel/pelo) solo tiene sentido para el modelo
+    // masculino que ya está cargado ahí; a las mujeres se les deja sin avatar por defecto
+    // hasta que exista un snapshot propio para ese caso.
+    const isMale = userData.sexo === 'H';
+
     // Create user without initial chips
     const user = await this.usersRepository.create({
       ...userData,
@@ -89,9 +94,11 @@ export class UsersService {
       password: hashedPassword,
       chips: 0,
       firstChips: false,
-      avatarBin: DEFAULT_AVATAR_BUFFER,
-      avatarMime: DEFAULT_AVATAR_MIME,
-      avatarData: DEFAULT_AVATAR_DATA,
+      ...(isMale && {
+        avatarBin: DEFAULT_AVATAR_BUFFER,
+        avatarMime: DEFAULT_AVATAR_MIME,
+        avatarData: DEFAULT_AVATAR_DATA,
+      }),
       referralCode,
       referredBy,
     });
