@@ -14,10 +14,37 @@ if (!match) {
 const buffer = Buffer.from(match[1], 'base64');
 const png = PNG.sync.read(buffer);
 
-// Mismo criterio que ExtractTopSquareThumbnail en Unity: cuadrado desde arriba, centrado
-// horizontalmente. En PNG (top-left origin) "arriba" es y = 0.
-const size = Math.min(png.width, png.height);
-const x = Math.floor((png.width - size) / 2);
+// Mismo criterio que ExtractTopSquareThumbnail en Unity: se mide el ancho real de contenido
+// opaco solo en la mitad de arriba de la imagen (cabeza + pelo, sin hombros) y se usa eso
+// como lado del cuadrado, en vez de todo el ancho del busto. En PNG (top-left origin)
+// "arriba" es y = 0, así que la mitad de arriba es y en [0, height/2).
+const topRegionHeight = Math.floor(png.height / 2);
+let headMinX = png.width;
+let headMaxX = 0;
+let found = false;
+
+for (let y = 0; y < topRegionHeight; y++) {
+  for (let x = 0; x < png.width; x++) {
+    const idx = (png.width * y + x) << 2;
+    const alpha = png.data[idx + 3];
+    if (alpha > 100) {
+      found = true;
+      if (x < headMinX) headMinX = x;
+      if (x > headMaxX) headMaxX = x;
+    }
+  }
+}
+
+let size, x;
+if (found) {
+  const headWidth = Math.ceil((headMaxX - headMinX + 1) * 1.15);
+  const headCenterX = Math.floor((headMinX + headMaxX) / 2);
+  size = Math.min(Math.max(headWidth, 1), png.width);
+  x = Math.min(Math.max(headCenterX - Math.floor(size / 2), 0), png.width - size);
+} else {
+  size = Math.min(png.width, png.height);
+  x = Math.floor((png.width - size) / 2);
+}
 const y = 0;
 
 const thumb = new PNG({ width: size, height: size });
