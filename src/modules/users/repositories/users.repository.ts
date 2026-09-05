@@ -14,6 +14,17 @@ export class UsersRepository {
     return this.repository.findOne({ where: { id } });
   }
 
+  // avatarBin/avatarThumbBin son select:false (ver user.entity.ts) para no traerlos en cada
+  // findById normal; este método los pide explícitamente para los endpoints que sirven la
+  // imagen/thumbnail.
+  async findByIdWithAvatarBinary(id: string): Promise<User | null> {
+    return this.repository
+      .createQueryBuilder('user')
+      .addSelect(['user.avatarBin', 'user.avatarThumbBin'])
+      .where('user.id = :id', { id })
+      .getOne();
+  }
+
   async findByEmail(email: string): Promise<User | null> {
     return this.repository.findOne({ where: { email } });
   }

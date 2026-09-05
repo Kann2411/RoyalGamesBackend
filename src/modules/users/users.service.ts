@@ -455,7 +455,7 @@ export class UsersService {
   
 
   async getAvatarBinary(userId: string): Promise<{ buffer?: Buffer; mime?: string } | null> {
-    const user = await this.usersRepository.findById(userId);
+    const user = await this.usersRepository.findByIdWithAvatarBinary(userId);
     if (!user) {
       throw new NotFoundException('User not found');
     }
@@ -463,7 +463,7 @@ export class UsersService {
   }
 
   async getAvatarThumbnailBinary(userId: string): Promise<{ buffer?: Buffer; mime?: string } | null> {
-    const user = await this.usersRepository.findById(userId);
+    const user = await this.usersRepository.findByIdWithAvatarBinary(userId);
     if (!user) {
       throw new NotFoundException('User not found');
     }

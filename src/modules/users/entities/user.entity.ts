@@ -28,7 +28,11 @@ export class User {
   @Column({ type: 'varchar', nullable: true })
   password: string;
 
-  @Column({ name: 'avatar_bin', type: 'bytea', nullable: true })
+  // select: false: son blobs de cientos de KB. Sin esto, CUALQUIER findById (getUserById,
+  // getUserByEmail, etc.) los traía enteros y los mandaba en el JSON de respuesta —un
+  // GET /user/:id llegó a pesar 5.5MB por esto. Los endpoints que sí necesitan el binario
+  // (getAvatarBinary, getAvatarThumbnailBinary) los piden explícitamente con addSelect.
+  @Column({ name: 'avatar_bin', type: 'bytea', nullable: true, select: false })
   avatarBin: Buffer;
 
   @Column({ name: 'avatar_mime', type: 'varchar', nullable: true })
@@ -36,7 +40,7 @@ export class User {
 
   // Recorte cuadrado (cabeza/cuello) generado en Unity aparte del avatar completo, para
   // mostrar en el nav y otros lugares chicos sin achicar el busto entero.
-  @Column({ name: 'avatar_thumb_bin', type: 'bytea', nullable: true })
+  @Column({ name: 'avatar_thumb_bin', type: 'bytea', nullable: true, select: false })
   avatarThumbBin: Buffer;
 
   @Column({ name: 'avatar_thumb_mime', type: 'varchar', nullable: true })
